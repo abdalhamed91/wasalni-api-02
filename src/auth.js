@@ -75,6 +75,7 @@ async function publicUser(u) {
   return {
     id: u.id, phone: u.phone, dial: u.dial, countryCode: u.country_code,
     role: u.role, gender: u.gender, name: u.name, email: u.email, rating: u.rating,
+    ratingCount: Number(u.rating_count) || 0, serviceType: u.service_type || 'carpool',
     wallet: u.wallet, earnings: u.earnings, vehicle: v,
     verified: db.kind === 'postgres' ? !!u.verified : !!Number(u.verified),
     verifyStatus: u.verify_status || 'none',

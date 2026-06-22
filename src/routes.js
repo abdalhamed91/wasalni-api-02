@@ -13,6 +13,18 @@ const { paymentsEnabled, verifyPayment } = require('./payments');
 const r = express.Router();
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
+// طبّق تقييمًا جديدًا على مستخدم (متوسّط متحرّك مع عدّاد)
+async function applyRating(userId, stars) {
+  const s = Math.max(1, Math.min(5, Math.round(Number(stars) || 0)));
+  if (!s) return;
+  const u = await db.queryOne('SELECT rating, rating_count FROM users WHERE id=?', [userId]);
+  if (!u) return;
+  const cnt = Number(u.rating_count) || 0;
+  const avg = cnt > 0 ? Number(u.rating) : 0;
+  const newAvg = round2((avg * cnt + s) / (cnt + 1));
+  await db.execute('UPDATE users SET rating=?, rating_count=? WHERE id=?', [newAvg, cnt + 1, userId]);
+}
+
 // ===== هندسة المطابقة على المسار (corridor matching) =====
 const validPt = (p) => Array.isArray(p) && p[0] != null && p[1] != null && Number.isFinite(+p[0]) && Number.isFinite(+p[1]);
 function haversineKm(a, b) {
@@ -94,13 +106,14 @@ r.post('/uploads', async (req, res) => {
 
 // ============ تقديم طلب توثيق السائق ============
 r.post('/me/verify-request', async (req, res) => {
-  const { idNumber, birthDate, city, docs } = req.body || {};
+  const { idNumber, birthDate, city, docs, serviceType } = req.body || {};
   const docsJson = docs && typeof docs === 'object' ? JSON.stringify(docs) : null;
+  const st = ['carpool', 'public_bus', 'school_bus'].includes(serviceType) ? serviceType : null;
   await db.execute(`UPDATE users SET
       id_number = COALESCE(?, id_number), birth_date = COALESCE(?, birth_date),
-      city = COALESCE(?, city), docs = COALESCE(?, docs), role = 'driver',
+      city = COALESCE(?, city), docs = COALESCE(?, docs), service_type = COALESCE(?, service_type), role = 'driver',
       verify_status = 'submitted', verify_submitted_at = ?
-    WHERE id=?`, [idNumber ?? null, birthDate ?? null, city ?? null, docsJson, now(), req.user.id]);
+    WHERE id=?`, [idNumber ?? null, birthDate ?? null, city ?? null, docsJson, st, now(), req.user.id]);
   // أبلغ السائق أن طلبه قيد المراجعة
   await addNotif(req.user.id, 'clock', 'amber', 'طلب التوثيق قيد المراجعة', 'سنراجع بياناتك ونعلمك بالنتيجة قريبًا');
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
@@ -439,7 +452,7 @@ r.get('/rides/search', async (req, res) => {
   const D = (num(req.query.toLat) != null && num(req.query.toLng) != null) ? [num(req.query.toLat), num(req.query.toLng)] : null;
   const corridorKm = Math.min(10, Math.max(1, num(req.query.radiusKm) || 3));
 
-  const sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.gender AS driver_gender, d.country_code AS driver_country,
+  const sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.rating_count AS driver_rating_count, d.gender AS driver_gender, d.country_code AS driver_country,
             v.make, v.model, v.color, v.plate
      FROM trips t
      JOIN users d ON d.id = t.driver_id
@@ -481,6 +494,7 @@ r.get('/rides/search', async (req, res) => {
       id: t.id,
       driver: t.driver_name || 'سائق',
       rating: t.driver_rating || 5,
+      ratingCount: Number(t.driver_rating_count) || 0,
       car: [t.make, t.model, t.color].filter(Boolean).join(' ') || 'مركبة',
       plate: t.plate || '',
       time: t.time || '', date: t.date || '',
@@ -610,6 +624,36 @@ r.post('/bookings/:id/status', async (req, res) => {
     wallet = round2((await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id])).wallet);
   }
   res.json({ booking: await db.queryOne('SELECT * FROM bookings WHERE id=?', [b.id]), ...(wallet !== undefined ? { wallet } : {}) });
+});
+
+// ============ التقييمات (حقيقية — تبدأ بدون تقييم) ============
+// الراكب يقيّم سائق رحلته
+r.post('/bookings/:id/rate', async (req, res) => {
+  const b = await db.queryOne('SELECT * FROM bookings WHERE id=?', [Number(req.params.id)]);
+  if (!b) return bad(res, 'الحجز غير موجود', 404);
+  if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  if (Number(b.rated)) return bad(res, 'سبق تقييم هذه الرحلة');
+  // أوجد سائق الرحلة عبر الطلب المرتبط
+  let driverId = null;
+  if (b.request_id) {
+    const rq = await db.queryOne('SELECT t.driver_id FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [b.request_id]);
+    driverId = rq ? rq.driver_id : null;
+  }
+  if (!driverId) return bad(res, 'تعذّر تحديد السائق');
+  await applyRating(driverId, req.body?.stars);
+  await db.execute('UPDATE bookings SET rated=1 WHERE id=?', [b.id]);
+  res.json({ ok: true });
+});
+// السائق يقيّم راكبًا (عبر طلب الحجز)
+r.post('/requests/:id/rate', async (req, res) => {
+  const q = await db.queryOne('SELECT r.*, t.driver_id FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [Number(req.params.id)]);
+  if (!q) return bad(res, 'الطلب غير موجود', 404);
+  if (q.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  if (Number(q.rated)) return bad(res, 'سبق التقييم');
+  if (!q.passenger_id) return bad(res, 'لا يمكن تقييم هذا الراكب');
+  await applyRating(q.passenger_id, req.body?.stars);
+  await db.execute('UPDATE requests SET rated=1 WHERE id=?', [q.id]);
+  res.json({ ok: true });
 });
 
 // ============ الرسائل ============

@@ -21,6 +21,8 @@ const TABLES = [
     email TEXT DEFAULT '',
     gender TEXT,
     rating REAL NOT NULL DEFAULT 5.0,
+    rating_count ${INT} DEFAULT 0,
+    service_type TEXT DEFAULT 'carpool',
     wallet REAL NOT NULL DEFAULT 0.0,
     earnings REAL NOT NULL DEFAULT 0.0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -255,6 +257,12 @@ async function runMigrations() {
   await ensureColumn('users', 'push_token', 'TEXT');
   // نوع النقل: city | intercity | public_bus | school_bus
   await ensureColumn('trips', 'kind', "TEXT NOT NULL DEFAULT 'city'");
+  // التقييم الحقيقي: عدد التقييمات (0 = بدون تقييم بعد) + منع التقييم المزدوج
+  await ensureColumn('users', 'rating_count', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
+  await ensureColumn('bookings', 'rated', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
+  await ensureColumn('requests', 'rated', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
+  // نوع خدمة السائق: carpool | public_bus | school_bus
+  await ensureColumn('users', 'service_type', "TEXT DEFAULT 'carpool'");
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
