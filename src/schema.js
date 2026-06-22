@@ -1,0 +1,283 @@
+// ============================================================
+// مخطّط قاعدة بيانات وصلني — متوافق مع SQLite و PostgreSQL
+// ============================================================
+const db = require('./database');
+const PG = db.kind === 'postgres';
+
+// أنواع تتكيّف حسب المحرّك
+const ID = PG ? 'BIGSERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+const NOW = 'BIGINT NOT NULL';           // نخزّن الوقت كـepoch ms (متوافق)
+const INT = PG ? 'BIGINT' : 'INTEGER';
+const BOOL = PG ? 'BOOLEAN' : 'INTEGER';  // SQLite يخزّن 0/1
+
+const TABLES = [
+  `CREATE TABLE IF NOT EXISTS users (
+    id ${ID},
+    phone TEXT UNIQUE NOT NULL,
+    dial TEXT NOT NULL DEFAULT '+962',
+    country_code TEXT NOT NULL DEFAULT 'JO',
+    role TEXT NOT NULL DEFAULT 'passenger',
+    name TEXT NOT NULL DEFAULT '',
+    email TEXT DEFAULT '',
+    gender TEXT,
+    rating REAL NOT NULL DEFAULT 5.0,
+    wallet REAL NOT NULL DEFAULT 0.0,
+    earnings REAL NOT NULL DEFAULT 0.0,
+    status TEXT NOT NULL DEFAULT 'active',
+    verified ${BOOL} NOT NULL DEFAULT ${PG ? 'false' : '0'},
+    id_number TEXT DEFAULT '',
+    birth_date TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    verify_status TEXT NOT NULL DEFAULT 'none',
+    verify_submitted_at ${INT},
+    docs TEXT DEFAULT '',
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS otps (
+    phone TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
+    expires_at ${INT} NOT NULL,
+    attempts ${INT} NOT NULL DEFAULT 0,
+    sent_at ${INT} NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS vehicles (
+    user_id ${INT} PRIMARY KEY,
+    make TEXT, model TEXT, year TEXT, color TEXT, plate TEXT, capacity ${INT} DEFAULT 4
+  )`,
+  `CREATE TABLE IF NOT EXISTS transactions (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    title TEXT NOT NULL,
+    amount REAL NOT NULL,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'passenger',
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS trips (
+    id ${ID},
+    driver_id ${INT} NOT NULL,
+    from_label TEXT, to_label TEXT,
+    from_lat REAL, from_lng REAL, to_lat REAL, to_lng REAL,
+    date TEXT, time TEXT,
+    price_per_seat REAL NOT NULL,
+    total_seats ${INT} NOT NULL,
+    gender_pref TEXT DEFAULT 'any',
+    cancel_reason TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS requests (
+    id ${ID},
+    trip_id ${INT} NOT NULL,
+    passenger_id ${INT},
+    passenger_name TEXT NOT NULL,
+    rating REAL NOT NULL DEFAULT 4.8,
+    seats ${INT} NOT NULL DEFAULT 1,
+    pickup TEXT NOT NULL,
+    pickup_lat REAL, pickup_lng REAL,
+    fare REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+  )`,
+  `CREATE TABLE IF NOT EXISTS bookings (
+    id ${ID},
+    passenger_id ${INT} NOT NULL,
+    request_id ${INT},
+    driver TEXT, driver_rating REAL, car TEXT, plate TEXT,
+    from_label TEXT, to_label TEXT, time TEXT,
+    seats ${INT} NOT NULL, fare REAL,
+    preferences TEXT, pax_note TEXT,
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS threads (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    peer_name TEXT NOT NULL,
+    initial TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS messages (
+    id ${ID},
+    thread_id ${INT} NOT NULL,
+    text TEXT NOT NULL,
+    mine ${INT} NOT NULL DEFAULT 1,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS notifications (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'bell', tone TEXT NOT NULL DEFAULT 'blue',
+    title TEXT NOT NULL, sub TEXT NOT NULL DEFAULT '',
+    to_route TEXT,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS places (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    label TEXT NOT NULL, sub TEXT NOT NULL DEFAULT '',
+    lat REAL, lng REAL
+  )`,
+  `CREATE TABLE IF NOT EXISTS cards (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    brand TEXT NOT NULL DEFAULT 'mada', last4 TEXT NOT NULL,
+    exp TEXT NOT NULL, holder TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reports (
+    id ${ID},
+    reporter_id ${INT} NOT NULL,
+    reporter_role TEXT,
+    against TEXT,
+    trip_id ${INT},
+    category TEXT NOT NULL,
+    note TEXT,
+    reply TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS promos (
+    id ${ID},
+    code TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    discount_type TEXT NOT NULL DEFAULT 'percent',
+    discount_value REAL NOT NULL,
+    max_uses ${INT} NOT NULL DEFAULT 0,
+    used_count ${INT} NOT NULL DEFAULT 0,
+    country TEXT,
+    active ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'},
+    expires_at ${INT},
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS admin_notifications (
+    id ${ID},
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    audience TEXT NOT NULL DEFAULT 'all',
+    sent_count ${INT} NOT NULL DEFAULT 0,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS support_tickets (
+    id ${ID},
+    user_id ${INT},
+    user_name TEXT,
+    subject TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    reply TEXT,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS admin_users (
+    id ${ID},
+    username TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'support',
+    permissions TEXT NOT NULL DEFAULT '',
+    active ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'},
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS bank_accounts (
+    user_id ${INT} PRIMARY KEY,
+    holder TEXT NOT NULL,
+    bank TEXT NOT NULL,
+    iban TEXT NOT NULL,
+    updated_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS payments (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    provider TEXT NOT NULL,
+    ref TEXT UNIQUE NOT NULL,
+    amount REAL NOT NULL,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS withdrawals (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    amount REAL NOT NULL,
+    holder TEXT, bank TEXT, iban TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    admin_note TEXT,
+    created_at ${NOW},
+    paid_at ${INT}
+  )`,
+  `CREATE TABLE IF NOT EXISTS country_settings (
+    code TEXT PRIMARY KEY,
+    profit_type TEXT NOT NULL DEFAULT 'percent',
+    profit_value REAL NOT NULL DEFAULT 0.15,
+    price_per_km REAL NOT NULL DEFAULT 1.5,
+    km_cap REAL NOT NULL DEFAULT 2.5,
+    enabled ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'}
+  )`,
+];
+
+// يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
+async function ensureColumn(table, column, definition) {
+  try {
+    if (PG) {
+      const r = await db.queryOne(
+        `SELECT column_name FROM information_schema.columns WHERE table_name=$1 AND column_name=$2`,
+        [table, column]
+      );
+      if (!r) await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } else {
+      const cols = await db.query(`PRAGMA table_info(${table})`, []);
+      if (!cols.some(c => c.name === column)) await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  } catch (e) { /* العمود موجod أو خطأ غير حرج */ }
+}
+
+async function runMigrations() {
+  // أعمدة التوثيق على users (للقواعد القديمة)
+  await ensureColumn('users', 'id_number', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'birth_date', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'city', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'verify_status', "TEXT NOT NULL DEFAULT 'none'");
+  await ensureColumn('users', 'verify_submitted_at', PG ? 'BIGINT' : 'INTEGER');
+  // عمود الرد على البلاغات
+  await ensureColumn('reports', 'reply', 'TEXT');
+  // ربط طلب الحجز بالراكب (لإشعاره عند القبول/الرفض)
+  await ensureColumn('requests', 'passenger_id', PG ? 'BIGINT' : 'INTEGER');
+  // ربط الحجز بطلب السائق (للاسترجاع التلقائي عند الرفض)
+  await ensureColumn('bookings', 'request_id', PG ? 'BIGINT' : 'INTEGER');
+  // وثائق توثيق السائق (روابط الصور كـJSON)
+  await ensureColumn('users', 'docs', "TEXT DEFAULT ''");
+}
+
+// فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
+const INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id)',
+  'CREATE INDEX IF NOT EXISTS idx_trips_status ON trips(status)',
+  'CREATE INDEX IF NOT EXISTS idx_requests_trip ON requests(trip_id)',
+  'CREATE INDEX IF NOT EXISTS idx_requests_passenger ON requests(passenger_id)',
+  'CREATE INDEX IF NOT EXISTS idx_bookings_passenger ON bookings(passenger_id)',
+  'CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)',
+  'CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawals(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status)',
+];
+
+async function initSchema() {
+  for (const sql of TABLES) await db.exec(sql);
+  await runMigrations();
+  for (const sql of INDEXES) { try { await db.exec(sql); } catch (e) { /* فهرس موجود */ } }
+  // بذور إعدادات الدول
+  const defaults = {
+    SA: ['percent', 0.15, 1.5, 2.5], JO: ['percent', 0.15, 0.35, 0.6], EG: ['percent', 0.15, 5.0, 9.0],
+  };
+  for (const [code, [pt, pv, ppk, cap]] of Object.entries(defaults)) {
+    const exists = await db.queryOne('SELECT code FROM country_settings WHERE code=?', [code]);
+    if (!exists) await db.execute(
+      'INSERT INTO country_settings (code,profit_type,profit_value,price_per_km,km_cap) VALUES (?,?,?,?,?)',
+      [code, pt, pv, ppk, cap]
+    );
+  }
+  console.log(`✅ المخطّط جاهز (${db.kind})`);
+}
+
+module.exports = { initSchema, PG };

@@ -1,0 +1,20 @@
+{
+  "name": "wasalni-api",
+  "version": "1.0.0",
+  "description": "Wasalni ride-sharing REST API — Express + SQLite",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.21.0"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

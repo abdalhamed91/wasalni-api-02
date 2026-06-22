@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="light">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>وصلني — لوحة التحكم الإدارية</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Noto+Kufi+Arabic:wght@700;800;900&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+ --bg:#EEF3FB;--surface:#fff;--surface2:#F6F9FF;--ink:#142036;--muted:#647691;--line:#E5ECF6;
+ --blue:#1E5BC2;--navy:#0F2F72;--orange:#FF6320;--amber:#FFB35A;--green:#22C55E;--red:#EF4444;
+ --tint:#EAF1FC;--shadow:0 4px 18px rgba(18,55,132,.07);--shadow2:0 10px 34px rgba(18,55,132,.12);
+ --sb1:#0F2F72;--sb2:#0A2353;--rad:16px;
+}
+html[data-theme=dark]{
+ --bg:#0A1426;--surface:#13203B;--surface2:#0F1B33;--ink:#E9EFFA;--muted:#90A0BE;--line:#26344F;
+ --tint:#16263F;--shadow:0 4px 18px rgba(0,0,0,.3);--shadow2:0 12px 36px rgba(0,0,0,.45);--sb1:#0C1A33;--sb2:#0A1730;
+}
+body{font-family:'Cairo','Noto Kufi Arabic',sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;font-size:14px;-webkit-font-smoothing:antialiased}
+.num{font-family:'Poppins',sans-serif;font-feature-settings:"tnum"}
+h1,h2,h3,h4{font-family:'Cairo',sans-serif;font-weight:800}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+/* sidebar */
+.sidebar{width:250px;flex:0 0 250px;background:linear-gradient(180deg,var(--sb1),var(--sb2));color:#fff;height:100vh;position:sticky;top:0;display:flex;flex-direction:column;padding:18px 14px;gap:4px;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:11px;padding:6px 8px 18px}
+.brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--blue),var(--orange));display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:20px;font-family:'Noto Kufi Arabic'}
+.brand .nm{font-family:'Noto Kufi Arabic';font-weight:900;font-size:19px}
+.brand .sub{font-size:10.5px;color:#9fb3d6;letter-spacing:2px}
+.nav-item{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:12px;color:#c4d2ea;cursor:pointer;font-weight:600;font-size:13.5px;transition:.15s}
+.nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.nav-item.active{background:rgba(255,255,255,.13);color:#fff}
+.nav-item .ic{width:20px;text-align:center;font-size:16px}
+.nav-sep{font-size:10.5px;color:#7f93b8;padding:14px 13px 6px;letter-spacing:1px;font-weight:700}
+/* main */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:64px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:10}
+.topbar h2{font-size:18px}
+.tb-actions{display:flex;align-items:center;gap:12px}
+.icon-btn{width:40px;height:40px;border-radius:11px;border:1px solid var(--line);background:var(--surface2);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;color:var(--ink)}
+.content{padding:26px;flex:1}
+/* cards */
+.grid{display:grid;gap:16px}
+.g4{grid-template-columns:repeat(4,1fr)}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:1100px){.g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--rad);padding:20px;box-shadow:var(--shadow)}
+.stat .lbl{color:var(--muted);font-size:12.5px;font-weight:600}
+.stat .val{font-size:28px;font-weight:800;margin-top:6px}
+.stat .ic{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:20px;float:left}
+.stat .delta{font-size:11.5px;margin-top:7px;color:var(--muted)}
+.b-blue{background:var(--tint);color:var(--blue)}.b-or{background:#FFEDE3;color:var(--orange)}.b-gr{background:#E4F8EC;color:var(--green)}.b-am{background:#FFF3E0;color:#C97B17}
+html[data-theme=dark] .b-or{background:#3A2417}html[data-theme=dark] .b-gr{background:#13301F}html[data-theme=dark] .b-am{background:#33260F}
+.sec-title{font-size:16px;margin:24px 0 14px;display:flex;align-items:center;gap:9px}
+/* table */
+table{width:100%;border-collapse:collapse}
+th,td{text-align:right;padding:13px 14px;font-size:13px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:700;font-size:12px;background:var(--surface2)}
+tr:hover td{background:var(--surface2)}
+.tag{display:inline-block;padding:3px 11px;border-radius:999px;font-size:11.5px;font-weight:700}
+.t-green{background:#E4F8EC;color:#15803D}.t-blue{background:var(--tint);color:var(--blue)}.t-am{background:#FFF3E0;color:#C97B17}.t-red{background:#FEE7E7;color:#DC2626}.t-gray{background:var(--line);color:var(--muted)}
+html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{background:#33260F}html[data-theme=dark] .t-red{background:#3A1A1A}
+.btn{padding:8px 16px;border-radius:10px;border:none;font-family:inherit;font-weight:700;font-size:12.5px;cursor:pointer}
+.btn-pri{background:var(--blue);color:#fff}.btn-gr{background:var(--green);color:#fff}.btn-rd{background:var(--red);color:#fff}.btn-gh{background:var(--surface2);color:var(--ink);border:1px solid var(--line)}
+.btn:active{transform:scale(.97)}
+.muted{color:var(--muted)}
+.row{display:flex;align-items:center;gap:8px}
+.spacer{flex:1}
+.seg{display:flex;gap:6px;background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:4px;width:fit-content}
+.seg button{border:none;background:none;padding:8px 16px;border-radius:9px;font-family:inherit;font-weight:700;font-size:12.5px;cursor:pointer;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--blue);box-shadow:var(--shadow)}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.field label{font-size:12px;font-weight:700;color:var(--muted)}
+.field input{padding:11px 14px;border:1px solid var(--line);border-radius:11px;background:var(--surface2);color:var(--ink);font-family:inherit;font-size:14px}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--tint);color:var(--blue);display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;margin-left:8px}
+/* login */
+.login-wrap{position:fixed;inset:0;background:linear-gradient(135deg,var(--sb1),var(--sb2));display:flex;align-items:center;justify-content:center;z-index:100}
+.login-card{background:var(--surface);border-radius:22px;padding:38px 34px;width:360px;box-shadow:var(--shadow2);text-align:center}
+.login-card .logo{width:60px;height:60px;border-radius:17px;background:linear-gradient(135deg,var(--blue),var(--orange));margin:0 auto 16px;display:flex;align-items:center;justify-content:center;font-size:30px;color:#fff;font-family:'Noto Kufi Arabic';font-weight:900}
+.hidden{display:none!important}
+.empty{text-align:center;padding:50px;color:var(--muted)}
+.spin{display:inline-block;width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--blue);border-radius:50%;animation:s .8s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}.bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--orange))}
+.nav-badge{background:#EF4444;color:#fff;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-inline-start:6px}
+.rep-card{border-inline-start:3px solid #EF4444}
+.rep-card.resolved{border-inline-start-color:#22C55E;opacity:.7}
+.modal-bg{position:fixed;inset:0;background:rgba(15,47,114,.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.modal-bg.open{display:flex}
+.modal{background:#fff;border-radius:18px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}
+.modal-head h3{font-size:17px;margin:0}
+.modal-x{cursor:pointer;font-size:22px;color:var(--muted);background:none;border:none;line-height:1}
+.modal-body{padding:22px}
+.detail-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f0f3f8;font-size:13.5px}
+.detail-row .lbl{color:var(--muted)}
+.detail-row .val{font-weight:600}
+</style>
+</head>
+<body>
+
+<!-- شاشة الدخول -->
+<div class="login-wrap" id="login">
+  <div class="login-card">
+    <div class="logo">و</div>
+    <h2 style="font-size:21px">لوحة تحكم وصلني</h2>
+    <p class="muted" style="font-size:13px;margin-top:6px">أدخل كلمة مرور الإدارة للمتابعة</p>
+    <div class="field" style="margin-top:22px;text-align:right">
+      <label>عنوان الخادم (API)</label>
+      <input id="apiUrl" value="http://localhost:4000" dir="ltr">
+    </div>
+    <div class="field" style="text-align:right">
+      <label>كلمة مرور الإدارة</label>
+      <input id="passcode" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div id="loginErr" class="muted" style="color:var(--red);font-size:12.5px;min-height:18px;margin-bottom:6px"></div>
+    <button class="btn btn-pri" style="width:100%;padding:13px" onclick="doLogin()">دخول</button>
+    <p class="muted" style="font-size:11px;margin-top:14px">كلمة المرور الافتراضية للتجربة: wasalni-admin</p>
+  </div>
+</div>
+
+<!-- التطبيق -->
+<div class="sidebar hidden" id="app-sb">
+  <div class="brand"><div class="logo">و</div><div><div class="nm">وصلني</div><div class="sub">ADMIN</div></div></div>
+  <div class="nav-sep">التشغيل</div>
+  <div class="nav-item active" data-page="dashboard"><span class="ic">▦</span> لوحة المعلومات</div>
+  <div class="nav-item" data-page="operations"><span class="ic">🗺</span> الخريطة والعمليات</div>
+  <div class="nav-item" data-page="users"><span class="ic">◉</span> المستخدمون</div>
+  <div class="nav-item" data-page="drivers"><span class="ic">🚗</span> السائقون</div>
+  <div class="nav-item" data-page="verify"><span class="ic">✓</span> توثيق السائقين <span id="verifyBadge" class="tag t-am" style="margin-inline-start:auto"></span></div>
+  <div class="nav-item" data-page="trips"><span class="ic">🛣</span> الرحلات</div>
+  <div class="nav-item" data-page="bookings"><span class="ic">🎫</span> الحجوزات</div>
+  <div class="nav-sep">التفاعل</div>
+  <div class="nav-item" data-page="reports"><span class="ic">🚩</span> البلاغات <span id="repBadge" class="nav-badge" style="display:none"></span></div>
+  <div class="nav-item" data-page="support"><span class="ic">💬</span> الدعم <span id="supBadge" class="nav-badge" style="display:none"></span></div>
+  <div class="nav-item" data-page="promos"><span class="ic">🎁</span> العروض</div>
+  <div class="nav-item" data-page="notifications"><span class="ic">🔔</span> الإشعارات</div>
+  <div class="nav-sep">المال والإدارة</div>
+  <div class="nav-item" data-page="finance"><span class="ic">💰</span> المالية</div>
+  <div class="nav-item" data-page="withdrawals"><span class="ic">🏦</span> السحوبات <span id="wdBadge" class="nav-badge" style="display:none"></span></div>
+  <div class="nav-item" data-page="countries"><span class="ic">🌍</span> الدول والتسعير</div>
+  <div class="nav-item" data-page="team"><span class="ic">👥</span> الأدوار والصلاحيات</div>
+  <div class="nav-item" data-page="settings"><span class="ic">⚙</span> الإعدادات</div>
+  <div class="spacer" style="flex:1"></div>
+  <div class="nav-item" onclick="logout()"><span class="ic">⏻</span> خروج</div>
+</div>
+
+<div class="main hidden" id="app-main">
+  <div class="topbar">
+    <h2 id="pageTitle">لوحة المعلومات</h2>
+    <div class="tb-actions">
+      <div class="icon-btn" onclick="refresh()" title="تحديث">↻</div>
+      <div class="icon-btn" onclick="toggleTheme()" title="الوضع الليلي">◐</div>
+      <div class="avatar">A</div>
+    </div>
+  </div>
+  <div class="content" id="content"><div class="empty"><div class="spin"></div></div></div>
+</div>
+
+<script>
+const S = { api:'', token:'', page:'dashboard', cache:{} };
+const $ = s => document.querySelector(s);
+const fmt = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const initials = n => (n||'?').trim().charAt(0);
+const imgUrl = u => u ? (String(u).startsWith('http') ? u : S.api + u) : '';
+const DOC_LABELS = { idImage:'الهوية', license:'الرخصة', carFront:'أمامية', carBack:'خلفية', carInterior:'داخلية', registration:'الاستمارة', insurance:'التأمين' };
+function docGrid(docs){
+  if(!docs || typeof docs!=='object') return '<div class="muted" style="font-size:12px">لا توجد صور مرفوعة</div>';
+  const items = Object.entries(docs).filter(([k,v])=>v);
+  if(!items.length) return '<div class="muted" style="font-size:12px">لا توجد صور مرفوعة</div>';
+  return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px">${items.map(([k,v])=>`
+    <a href="${imgUrl(v)}" target="_blank" rel="noopener" style="display:block;border-radius:8px;overflow:hidden;border:1px solid var(--line)">
+      <img src="${imgUrl(v)}" loading="lazy" style="width:100%;height:84px;object-fit:cover;display:block;background:var(--bg)"/>
+      <div style="font-size:10.5px;text-align:center;padding:3px;background:var(--bg)">${DOC_LABELS[k]||esc(k)}</div>
+    </a>`).join('')}</div>`;
+}
+
+async function apiGet(path){ const r=await fetch(S.api+'/api/admin'+path,{headers:{Authorization:'Bearer '+S.token}}); if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||'خطأ'); return r.json(); }
+async function apiSend(path,method,body){ const r=await fetch(S.api+'/api/admin'+path,{method,headers:{Authorization:'Bearer '+S.token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}); if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||'خطأ'); return r.json(); }
+
+async function doLogin(){
+  S.api = $('#apiUrl').value.replace(/\/$/,'');
+  const pass = $('#passcode').value;
+  $('#loginErr').textContent='';
+  try{
+    const r = await fetch(S.api+'/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({passcode:pass})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||'فشل الدخول');
+    S.token = d.token;
+    localStorage.setItem('wasalni_admin',JSON.stringify({api:S.api,token:S.token}));
+    enterApp();
+  }catch(e){ $('#loginErr').textContent = e.message.includes('fetch')||e.message.includes('Failed')?'تعذّر الاتصال بالخادم — تأكّد أنه يعمل':e.message; }
+}
+function logout(){ localStorage.removeItem('wasalni_admin'); location.reload(); }
+function enterApp(){ $('#login').classList.add('hidden'); $('#app-sb').classList.remove('hidden'); $('#app-main').classList.remove('hidden'); bindNav(); go('dashboard'); }
+
+function bindNav(){ document.querySelectorAll('.nav-item[data-page]').forEach(el=>el.onclick=()=>go(el.dataset.page)); }
+function go(page){
+  S.page=page;
+  document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));
+  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
+  $('#pageTitle').textContent=titles[page]||page;
+  render();
+}
+function refresh(){ S.cache={}; render(); updateBadge(); refreshSupBadge(); refreshWdBadge(); }
+function toggleTheme(){ const h=document.documentElement; h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'; localStorage.setItem('wasalni_theme',h.dataset.theme); }
+
+async function updateBadge(){ try{ const s=await apiGet('/stats'); const b=$('#verifyBadge'); b.textContent=s.pendingVerify||''; b.style.display=s.pendingVerify?'inline-block':'none'; }catch(e){} }
+
+async function render(){
+  const c=$('#content'); c.innerHTML='<div class="empty"><div class="spin"></div></div>';
+  try{
+    if(S.page==='dashboard') return renderDashboard(c);
+    if(S.page==='operations') return renderOperations(c);
+    if(S.page==='users') return renderUsers(c,null);
+    if(S.page==='drivers') return renderUsers(c,'driver');
+    if(S.page==='verify') return renderVerify(c);
+    if(S.page==='trips') return renderTrips(c);
+    if(S.page==='bookings') return renderBookings(c);
+    if(S.page==='finance') return renderFinance(c);
+    if(S.page==='withdrawals') return renderWithdrawals(c);
+    if(S.page==='reports') return renderReports(c);
+    if(S.page==='support') return renderSupport(c);
+    if(S.page==='promos') return renderPromos(c);
+    if(S.page==='notifications') return renderAdminNotifs(c);
+    if(S.page==='countries') return renderCountries(c);
+    if(S.page==='team') return renderTeam(c);
+    if(S.page==='settings') return renderSettings(c);
+  }catch(e){ c.innerHTML='<div class="empty">تعذّر تحميل البيانات: '+esc(e.message)+'</div>'; }
+}
+
+function stat(lbl,val,ic,cls,delta){ return `<div class="card stat"><div class="ic ${cls}">${ic}</div><div class="lbl">${lbl}</div><div class="val num">${val}</div>${delta?`<div class="delta">${delta}</div>`:''}</div>`; }
+
+async function renderDashboard(c){ refreshRepBadge();
+  const s=await apiGet('/stats');
+  c.innerHTML = `
+   <div class="grid g4">
+     ${stat('إجمالي المستخدمين',fmt(s.users),'◉','b-blue',`${fmt(s.drivers)} سائق · ${fmt(s.passengers)} راكب`)}
+     ${stat('الرحلات المكتملة',fmt(s.tripsCompleted),'🛣','b-or',`${fmt(s.tripsTotal)} رحلة إجمالاً · ${fmt(s.tripsLive)} جارية`)}
+     ${stat('عمولة المنصة','﷼ '+fmt(s.commission),'💰','b-gr',`من إيراد ${fmt(s.gross)} ﷼ (${Math.round(s.commissionRate*100)}%)`)}
+     ${stat('بانتظار التوثيق',fmt(s.pendingVerify),'✓','b-am',`${fmt(s.verified)} سائق موثّق`)}
+   </div>
+   <div class="grid g2" style="margin-top:16px">
+     <div class="card">
+       <h3 style="font-size:15px;margin-bottom:14px">ملخّص الحجوزات</h3>
+       <div class="row"><span class="muted">إجمالي الحجوزات</span><span class="spacer"></span><b class="num">${fmt(s.bookings)}</b></div>
+       <div class="bar"><span style="width:${s.bookings?Math.round(s.bookingsCompleted/s.bookings*100):0}%"></span></div>
+       <div class="row" style="margin-top:6px"><span class="muted" style="font-size:12px">مكتملة: ${fmt(s.bookingsCompleted)}</span></div>
+       <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+       <div class="row"><span class="muted">أرصدة محافظ الركّاب</span><span class="spacer"></span><b class="num">﷼ ${fmt(s.walletsTotal)}</b></div>
+       <div class="row" style="margin-top:10px"><span class="muted">مستحقات على المنصة للسائقين</span><span class="spacer"></span><b class="num" style="color:var(--orange)">﷼ ${fmt(s.earningsOwed)}</b></div>
+     </div>
+     <div class="card">
+       <h3 style="font-size:15px;margin-bottom:14px">الدول المُفعّلة للخدمة</h3>
+       <div class="row" style="flex-wrap:wrap;gap:8px">
+         ${(s.serviceCountries||[]).map(cc=>`<span class="tag t-green">${({SA:'🇸🇦 السعودية',JO:'🇯🇴 الأردن',EG:'🇪🇬 مصر'})[cc]||cc}</span>`).join('')}
+       </div>
+       <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+       <h3 style="font-size:15px;margin-bottom:10px">نسبة العمولة الحالية</h3>
+       <div class="val num" style="font-size:32px">${Math.round(s.commissionRate*100)}%</div>
+       <button class="btn btn-gh" style="margin-top:12px" onclick="go('settings')">تعديل الإعدادات</button>
+     </div>
+   </div>
+   <div id="chartsRow" class="grid g2" style="margin-top:16px">
+     <div class="card"><h3 style="font-size:15px;margin-bottom:6px">الإيراد آخر 7 أيام</h3><div id="chRevenue" class="muted" style="font-size:12px">…</div></div>
+     <div class="card"><h3 style="font-size:15px;margin-bottom:12px">المستخدمون حسب الدولة</h3><div id="chCountries" class="muted" style="font-size:12px">…</div></div>
+   </div>
+   <div class="grid g2" style="margin-top:16px">
+     <div class="card"><h3 style="font-size:15px;margin-bottom:6px">الحجوزات آخر 7 أيام</h3><div id="chBookings" class="muted" style="font-size:12px">…</div></div>
+     <div class="card"><h3 style="font-size:15px;margin-bottom:12px">حالات الرحلات</h3><div id="chTrips" class="muted" style="font-size:12px">…</div></div>
+   </div>`;
+  loadCharts();
+}
+async function loadCharts(){
+  try{
+    const ch=await apiGet('/charts');
+    const rev=$('#chRevenue'), bk=$('#chBookings'), cc=$('#chCountries'), tr=$('#chTrips');
+    if(rev) rev.innerHTML=barChart(ch.daily.map(d=>({l:d.label,v:d.revenue})),{color:'#22C55E'});
+    if(bk) bk.innerHTML=barChart(ch.daily.map(d=>({l:d.label,v:d.bookings})),{color:'#1E5BC2'});
+    const palette=['#1E5BC2','#FF6320','#22C55E','#FFB35A','#0F2F72','#EF4444','#8B5CF6','#14B8A6'];
+    if(cc) cc.innerHTML=donut(ch.byCountry.map((x,i)=>({l:(CC_NAMES[x.code]||x.code),v:x.users,c:palette[i%palette.length]})));
+    const stNames={scheduled:'مجدولة',live:'جارية',completed:'مكتملة',cancelled:'ملغاة'};
+    const stColors={scheduled:'#1E5BC2',live:'#FFB35A',completed:'#22C55E',cancelled:'#EF4444'};
+    if(tr) tr.innerHTML=donut(ch.tripStatus.map(x=>({l:stNames[x.status]||x.status,v:x.c,c:stColors[x.status]||'#8FA0BE'})));
+  }catch(e){ const r=$('#chartsRow'); if(r) r.innerHTML='<div class="muted">تعذّر تحميل الرسوم</div>'; }
+}
+
+async function renderUsers(c,role){
+  const {users}=await apiGet('/users'+(role?'?role='+role:''));
+  if(!users.length){ c.innerHTML='<div class="empty">لا يوجد مستخدمون بعد. سجّل دخولًا من التطبيق لتظهر البيانات.</div>'; return; }
+  c.innerHTML = searchBar('tblUsers','بحث بالاسم أو الجوال…','users') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblUsers">
+    <thead><tr><th>المستخدم</th><th>الجوال</th><th>الدور</th><th>التقييم</th>${role==='driver'?'<th>المركبة</th>':''}<th>المحفظة</th><th>الحالة</th><th></th></tr></thead>
+    <tbody>${users.map(u=>`<tr>
+      <td><span class="avatar">${esc(initials(u.name))}</span> ${esc(u.name)}</td>
+      <td class="num" dir="ltr" style="text-align:right">${esc(u.dial)} ${esc(u.phone)}</td>
+      <td><span class="tag ${u.role==='driver'?'t-blue':'t-gray'}">${u.role==='driver'?'سائق':'راكب'}</span></td>
+      <td class="num">★ ${fmt(u.rating)}</td>
+      ${role==='driver'?`<td>${u.vehicle?esc(u.vehicle.make+' '+u.vehicle.model+' · '+u.vehicle.plate):'<span class="muted">—</span>'}</td>`:''}
+      <td class="num">﷼ ${fmt(u.role==='driver'?u.earnings:u.wallet)}</td>
+      <td><span class="tag ${u.status==='suspended'?'t-red':'t-green'}">${u.status==='suspended'?'موقوف':'نشط'}</span></td>
+      <td><div style="display:flex;gap:6px">
+        <button class="btn btn-pri" onclick="userDetail(${u.id})">تفاصيل</button>
+        ${u.status==='suspended'
+          ? `<button class="btn btn-gr" onclick="setStatus(${u.id},'active')">تفعيل</button>`
+          : `<button class="btn btn-gh" onclick="setStatus(${u.id},'suspended')">إيقاف</button>`}
+      </div></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+async function setStatus(id,status){ try{ await apiSend('/users/'+id+'/status','PATCH',{status}); render(); }catch(e){ alert(e.message); } }
+
+// ===== نظام النوافذ =====
+function openModal(title,html){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=html; $('#modalBg').classList.add('open'); }
+function closeModal(){ $('#modalBg').classList.remove('open'); }
+
+// ===== تفاصيل مستخدم كاملة + تعديل + رسالة =====
+async function userDetail(id){
+  try{
+    const d=await apiGet('/users/'+id);
+    const u=d.user, v=d.vehicle, s=d.stats;
+    const cur='﷼';
+    const row=(l,val)=>`<div class="detail-row"><span class="lbl">${l}</span><span class="val">${val}</span></div>`;
+    let html=`
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <span class="avatar" style="width:48px;height:48px;font-size:18px">${esc(initials(u.name||'؟'))}</span>
+        <div><b style="font-size:16px">${esc(u.name||'(بلا اسم)')}</b>
+        <div class="muted num" dir="ltr" style="text-align:right">${esc(u.dial||'')} ${esc(u.phone)}</div></div>
+        <span class="spacer"></span>
+        <span class="tag ${u.status==='suspended'?'t-red':'t-green'}">${u.status==='suspended'?'موقوف':'نشط'}</span>
+      </div>
+      ${row('الدور', u.role==='driver'?'سائق':'راكب')}
+      ${row('الجنس', u.gender==='female'?'أنثى':u.gender==='male'?'ذكر':'—')}
+      ${row('الدولة', u.country_code||'—')}
+      ${row('المدينة', u.city||'—')}
+      ${row('البريد', u.email||'—')}
+      ${row('التقييم', '★ '+fmt(u.rating))}
+      ${row('المحفظة', cur+' '+fmt(u.wallet))}
+      ${u.role==='driver'?row('الأرباح', cur+' '+fmt(u.earnings)):''}
+      ${row('الحجوزات', s.bookingsCount)}
+      ${u.role==='driver'?row('الرحلات المنشورة', s.tripsCount):''}
+      ${u.role==='driver'?row('حالة التوثيق', u.verified?'موثّق ✓':(u.verify_status==='submitted'?'بانتظار المراجعة':'غير موثّق')):''}
+      ${u.id_number?row('رقم الهوية', esc(u.id_number)):''}
+      ${u.birth_date?row('تاريخ الميلاد', esc(u.birth_date)):''}
+    `;
+    if(v) html+=`<div style="margin-top:14px;padding:12px;background:var(--bg);border-radius:10px;font-size:13px">
+      <b>🚗 المركبة:</b> ${esc([v.make,v.model,v.year,v.color].filter(Boolean).join(' '))} · لوحة ${esc(v.plate||'—')} · ${v.capacity||4} مقاعد</div>`;
+    if(d.docs) html+=`<div style="margin-top:14px"><b style="font-size:13px">📎 وثائق التوثيق</b>${docGrid(d.docs)}</div>`;
+    // أزرار التحكم
+    html+=`<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-pri" onclick="editUserForm(${u.id})">✏️ تعديل البيانات</button>
+      <button class="btn btn-gh" onclick="messageUserForm(${u.id})">💬 محادثة</button>
+      ${u.status==='suspended'
+        ? `<button class="btn btn-gr" onclick="setStatus(${u.id},'active');closeModal()">تفعيل الحساب</button>`
+        : `<button class="btn btn-rd" onclick="setStatus(${u.id},'suspended');closeModal()">إيقاف الحساب</button>`}
+    </div>`;
+    openModal('تفاصيل المستخدم', html);
+  }catch(e){ alert(e.message); }
+}
+function editUserForm(id){
+  apiGet('/users/'+id).then(d=>{
+    const u=d.user;
+    openModal('تعديل بيانات المستخدم', `
+      <div class="field"><label>الاسم</label><input id="eu_name" value="${esc(u.name||'')}"></div>
+      <div class="field"><label>البريد</label><input id="eu_email" value="${esc(u.email||'')}"></div>
+      <div class="field"><label>المدينة</label><input id="eu_city" value="${esc(u.city||'')}"></div>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1"><label>المحفظة (﷼)</label><input id="eu_wallet" type="number" step="0.5" value="${u.wallet}"></div>
+        <div class="field" style="flex:1"><label>التقييم</label><input id="eu_rating" type="number" step="0.1" min="0" max="5" value="${u.rating}"></div>
+      </div>
+      <div class="field"><label>الدور</label>
+        <select id="eu_role"><option value="passenger" ${u.role==='passenger'?'selected':''}>راكب</option><option value="driver" ${u.role==='driver'?'selected':''}>سائق</option></select></div>
+      <button class="btn btn-pri" onclick="saveUserEdit(${id})">حفظ التعديلات</button>
+      <button class="btn btn-gh" onclick="userDetail(${id})">رجوع</button>
+      <div id="euMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    `);
+  });
+}
+async function saveUserEdit(id){
+  const b={name:$('#eu_name').value,email:$('#eu_email').value,city:$('#eu_city').value,
+    wallet:+$('#eu_wallet').value,rating:+$('#eu_rating').value,role:$('#eu_role').value};
+  try{ await apiSend('/users/'+id,'PATCH',b); $('#euMsg').textContent='✓ حُفظت التعديلات'; $('#euMsg').style.color='var(--green)'; setTimeout(()=>{closeModal();render();},700); }
+  catch(e){ $('#euMsg').textContent=e.message; $('#euMsg').style.color='var(--red)'; }
+}
+async function messageUserForm(id){
+  openModal('محادثة المستخدم', '<div class="empty"><div class="spin"></div></div>');
+  let msgs=[];
+  try{ msgs=(await apiGet('/users/'+id+'/thread')).messages||[]; }catch(e){}
+  const bubbles = msgs.length ? msgs.map(m=>`
+    <div style="display:flex;justify-content:${m.fromUser?'flex-start':'flex-end'};margin:5px 0">
+      <div style="max-width:78%;padding:8px 12px;border-radius:12px;font-size:13px;background:${m.fromUser?'var(--bg)':'var(--blue)'};color:${m.fromUser?'var(--ink)':'#fff'}">
+        ${esc(m.text)}<div style="font-size:9px;opacity:.6;margin-top:3px">${m.fromUser?'المستخدم':'الدعم'} · ${new Date(m.at).toLocaleString('ar')}</div>
+      </div></div>`).join('') : '<div class="muted" style="text-align:center;font-size:12px;padding:16px">لا توجد رسائل بعد — ابدأ المحادثة</div>';
+  openModal('محادثة المستخدم', `
+    <div id="muThread" style="max-height:300px;overflow-y:auto;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;direction:rtl">${bubbles}</div>
+    <div class="field"><textarea id="mu_text" rows="2" placeholder="اكتب ردّك… يصل لحساب المستخدم مع إشعار" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;resize:vertical"></textarea></div>
+    <div class="row" style="gap:8px"><button class="btn btn-pri" onclick="sendUserMessage(${id})">إرسال</button>
+    <button class="btn btn-gh" onclick="userDetail(${id})">رجوع للتفاصيل</button></div>
+    <div id="muMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+  `);
+}
+async function sendUserMessage(id){
+  const el=$('#mu_text'); const text=el.value.trim();
+  if(!text){ $('#muMsg').textContent='اكتب نص الرسالة'; $('#muMsg').style.color='var(--red)'; return; }
+  try{ await apiSend('/users/'+id+'/message','POST',{text}); messageUserForm(id); }
+  catch(e){ $('#muMsg').textContent=e.message; $('#muMsg').style.color='var(--red)'; }
+}
+
+async function renderVerify(c){
+  const {drivers}=await apiGet('/drivers/pending');
+  if(!drivers.length){ c.innerHTML='<div class="empty">✓ لا توجد طلبات توثيق معلّقة.</div>'; return; }
+  c.innerHTML = `<div class="grid g2">${drivers.map(d=>`
+    <div class="card">
+      <div class="row"><span class="avatar">${esc(initials(d.name||'؟'))}</span><b>${esc(d.name||'(بلا اسم)')}</b>
+        <span class="spacer"></span>
+        <span class="tag ${d.verify_status==='submitted'?'t-am':'t-gray'}">${d.verify_status==='submitted'?'طلب جديد':'لم يُكمل'}</span></div>
+      <div class="muted num" dir="ltr" style="text-align:right;margin:10px 0">${esc(d.dial||'')} ${esc(d.phone)}</div>
+      <div style="font-size:13px;line-height:2;background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px">
+        <div>🆔 الهوية: <b>${esc(d.id_number||'—')}</b></div>
+        <div>🎂 الميلاد: ${esc(d.birth_date||'—')}</div>
+        <div>🏙️ المدينة: ${esc(d.city||'—')} · ${esc(d.country_code||'')}</div>
+        <div>👤 الجنس: ${d.gender==='female'?'أنثى':d.gender==='male'?'ذكر':'—'}</div>
+      </div>
+      <div style="font-size:13px;line-height:1.9;margin-bottom:8px">
+        <div>🚗 ${esc([d.make,d.model,d.year].filter(Boolean).join(' ')||'لم تُسجّل المركبة')}</div>
+        <div>🎨 ${esc(d.color||'—')} · 🔢 ${esc(d.plate||'—')} · ${d.capacity||4} مقاعد</div>
+      </div>
+      <div style="font-size:12.5px;font-weight:700;margin-top:6px">📎 الوثائق المرفوعة <span class="muted" style="font-weight:400">(اضغط للتكبير)</span></div>
+      ${docGrid(d.docs)}
+      <div class="row" style="margin-top:14px;gap:8px">
+        <button class="btn btn-gr" style="flex:1" onclick="verify(${d.id},true)">✓ اعتماد</button>
+        <button class="btn btn-rd" style="flex:1" onclick="rejectDriver(${d.id})">✗ رفض</button>
+      </div>
+    </div>`).join('')}</div>`;
+}
+async function verify(id,approve){ try{ await apiSend('/drivers/'+id+'/verify','POST',{approve}); render(); updateBadge(); }catch(e){ alert(e.message); } }
+function rejectDriver(id){
+  openModal('رفض طلب التوثيق', `
+    <div class="field"><label>سبب الرفض (يصل للسائق)</label>
+      <textarea id="rj_reason" rows="3" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit" placeholder="مثال: صورة الهوية غير واضحة"></textarea></div>
+    <button class="btn btn-rd" onclick="doReject(${id})">تأكيد الرفض</button>
+    <button class="btn btn-gh" onclick="closeModal()">إلغاء</button>
+  `);
+}
+async function doReject(id){
+  const reason=$('#rj_reason').value.trim();
+  try{ await apiSend('/drivers/'+id+'/verify','POST',{approve:false,reason}); closeModal(); render(); updateBadge(); }
+  catch(e){ alert(e.message); }
+}
+
+const tripTag={scheduled:['t-blue','مجدولة'],live:['t-am','جارية'],completed:['t-green','مكتملة'],cancelled:['t-red','ملغاة']};
+async function renderTrips(c){
+  const {trips}=await apiGet('/trips');
+  if(!trips.length){ c.innerHTML='<div class="empty">لا توجد رحلات منشورة بعد.</div>'; return; }
+  c.innerHTML = searchBar('tblTrips','بحث بالسائق أو المسار…','trips') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblTrips">
+    <thead><tr><th>السائق</th><th>المسار</th><th>الوقت</th><th>السعر/مقعد</th><th>المقاعد</th><th>الطلبات</th><th>الحالة</th></tr></thead>
+    <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr>
+      <td>${esc(t.driver_name)}</td>
+      <td>${esc(t.from_label)} ← ${esc(t.to_label)}</td>
+      <td class="num">${esc(t.date&&t.date!=='اليوم'?t.date+' · ':'')}${esc(t.time)}</td>
+      <td class="num">﷼ ${fmt(t.price_per_seat)}</td>
+      <td class="num">${fmt(t.accepted_count)}/${fmt(t.total_seats)}</td>
+      <td class="num">${fmt(t.req_count)}</td>
+      <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
+}
+
+const bkTag={confirmed:['t-blue','مؤكّد'],enroute:['t-am','في الطريق'],intrip:['t-am','جارية'],completed:['t-green','مكتملة'],cancelled:['t-red','ملغاة']};
+async function renderBookings(c){
+  const {bookings}=await apiGet('/bookings');
+  if(!bookings.length){ c.innerHTML='<div class="empty">لا توجد حجوزات بعد.</div>'; return; }
+  c.innerHTML = searchBar('tblBookings','بحث بالراكب أو السائق…','bookings') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblBookings">
+    <thead><tr><th>الراكب</th><th>السائق</th><th>المسار</th><th>المقاعد</th><th>الأجرة</th><th>الحالة</th></tr></thead>
+    <tbody>${bookings.map(b=>{const tg=bkTag[b.status]||['t-gray',b.status];return `<tr>
+      <td><span class="avatar">${esc(initials(b.passenger_name))}</span> ${esc(b.passenger_name)}</td>
+      <td>${esc(b.driver)}</td>
+      <td>${esc(b.from_label)} ← ${esc(b.to_label)}</td>
+      <td class="num">${fmt(b.seats)}</td>
+      <td class="num">﷼ ${fmt(b.fare)}</td>
+      <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
+}
+
+async function renderFinance(c){
+  const f=await apiGet('/finance');
+  c.innerHTML = `
+    <div class="grid g4">
+      ${stat('الإيراد الإجمالي','﷼ '+fmt(f.gross),'💵','b-blue','مجموع أجور الحجوزات')}
+      ${stat('عمولة المنصة','﷼ '+fmt(f.commission),'💰','b-gr',`من كل الرحلات المكتملة`)}
+      ${stat('مدفوعات للسائقين','﷼ '+fmt(f.driverPayouts),'🏦','b-or','عمليات السحب')}
+      ${stat('المبالغ المُستردّة','﷼ '+fmt(f.refunds),'↩','b-am','رحلات ملغاة')}
+    </div>
+    <div class="row" style="align-items:center;margin:18px 0 10px"><h3 class="sec-title" style="margin:0">دفتر المعاملات الأخير</h3><span class="spacer"></span>
+      <input class="inp" style="max-width:240px" placeholder="بحث في الدفتر…" oninput="filterTable(this,'tblFin')"/>
+      <button class="btn btn-gh" style="margin-inline-start:10px" onclick="exportCsv('finance')">⬇ تصدير CSV</button></div>
+    <div class="card" style="padding:0;overflow:hidden"><table id="tblFin">
+      <thead><tr><th>المستخدم</th><th>العملية</th><th>النوع</th><th>المبلغ</th></tr></thead>
+      <tbody>${f.transactions.map(t=>`<tr>
+        <td>${esc(t.user_name)}</td>
+        <td>${esc(t.title)}</td>
+        <td><span class="tag ${t.scope==='driver'?'t-blue':'t-gray'}">${t.scope==='driver'?'سائق':'راكب'}</span></td>
+        <td class="num" style="color:${t.kind==='in'?'var(--green)':'var(--red)'}">${t.kind==='in'?'+':'−'}﷼ ${fmt(t.amount)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+}
+
+async function renderWithdrawals(c){
+  const d=await apiGet('/withdrawals');
+  const all=d.withdrawals||[];
+  const pending=all.filter(w=>w.status==='pending');
+  const totalPending=pending.reduce((s,w)=>s+(+w.amount||0),0);
+  const totalPaid=all.filter(w=>w.status==='paid').reduce((s,w)=>s+(+w.amount||0),0);
+  const stTag=s=>s==='paid'?'<span class="tag t-green">مدفوع</span>':s==='rejected'?'<span class="tag t-red">مرفوض</span>':'<span class="tag t-amber">معلّق</span>';
+  c.innerHTML=`
+    <div class="grid g4">
+      ${stat('طلبات معلّقة',fmt(pending.length),'⏳','b-am','بانتظار المعالجة')}
+      ${stat('إجمالي المعلّق','﷼ '+fmt(totalPending),'🏦','b-or','مبالغ ستُحوّل')}
+      ${stat('إجمالي المدفوع','﷼ '+fmt(totalPaid),'✅','b-gr','حُوّلت للسائقين')}
+    </div>
+    <h3 class="sec-title" style="margin:18px 0 10px">طلبات السحب</h3>
+    <div class="card" style="padding:0;overflow:hidden"><table>
+      <thead><tr><th>السائق</th><th>الجوال</th><th>المبلغ</th><th>البنك / الآيبان</th><th>الحالة</th><th>إجراء</th></tr></thead>
+      <tbody>${all.length?all.map(w=>`<tr>
+        <td>${esc(w.user_name)}</td>
+        <td class="num">${esc((w.dial||'')+(w.user_phone||''))}</td>
+        <td class="num">﷼ ${fmt(w.amount)}</td>
+        <td>${esc(w.bank||'')}<div class="muted num" style="font-size:11px">${esc(w.iban||'')}</div></td>
+        <td>${stTag(w.status)}</td>
+        <td>${w.status==='pending'?`<button class="btn btn-pri" style="padding:5px 10px" onclick="wdAction(${w.id},'paid')">تم الدفع</button> <button class="btn btn-gh" style="padding:5px 10px" onclick="wdAction(${w.id},'reject')">رفض</button>`:(w.admin_note?esc(w.admin_note):'—')}</td>
+      </tr>`).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">لا توجد طلبات سحب</td></tr>'}</tbody>
+    </table></div>`;
+}
+async function wdAction(id,action){
+  let note=null;
+  if(action==='reject'){ note=prompt('سبب الرفض (يصل للسائق):'); if(note===null) return; }
+  try{ await apiSend('/withdrawals/'+id,'PATCH',{action,note}); refresh(); refreshWdBadge(); }catch(e){ alert(e.message); }
+}
+async function refreshWdBadge(){ try{ const d=await apiGet('/withdrawals?status=pending'); const b=$('#wdBadge'); const n=(d.withdrawals||[]).length; if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
+
+async function renderSettings(c){
+  const s=await apiGet('/settings');
+  let appS={};
+  try{ appS=(await apiGet('/app-settings')).settings||{}; }catch(e){}
+  const allC={SA:'🇸🇦 السعودية',JO:'🇯🇴 الأردن',EG:'🇪🇬 مصر',AE:'🇦🇪 الإمارات',KW:'🇰🇼 الكويت',QA:'🇶🇦 قطر',BH:'🇧🇭 البحرين',OM:'🇴🇲 عُمان'};
+  const g=(k,d='')=>esc(appS[k]!=null?appS[k]:d);
+  c.innerHTML = `<div class="grid g2">
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:8px">الدول المُفعّلة لطلب الرحلات</h3>
+      <p class="muted" style="font-size:12.5px;margin-bottom:14px">اختر الدول التي تُتاح فيها الخدمة للركّاب.</p>
+      <div id="ccList" style="display:flex;flex-direction:column;gap:10px">
+        ${Object.entries(allC).map(([k,v])=>`<label class="row" style="cursor:pointer">
+          <input type="checkbox" value="${k}" ${s.serviceCountries.includes(k)?'checked':''} style="width:18px;height:18px;accent-color:var(--blue)"> ${v}</label>`).join('')}
+      </div>
+      <button class="btn btn-pri" style="margin-top:16px" onclick="saveCountries()">حفظ الدول</button>
+      <div id="ccMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+    <div class="card" style="background:linear-gradient(135deg,#EEF3FB,#fff)">
+      <h3 style="font-size:16px;margin-bottom:8px">💰 ربح المنصّة</h3>
+      <p class="muted" style="font-size:13px;line-height:1.7">
+        يُضبط ربح المنصّة الآن <b>لكل دولة على حدة</b> من صفحة
+        <a onclick="go('countries')" style="color:var(--blue);cursor:pointer;font-weight:700">«الدول والتسعير»</a>،
+        حيث تختار لكل دولة: <b>نسبة مئوية</b> أو <b>مبلغ مقطوع</b> لكل رحلة، إضافةً إلى تسعير الكيلومتر.
+      </p>
+      <button class="btn btn-pri" style="margin-top:14px" onclick="go('countries')">الذهاب لصفحة الدول والتسعير ←</button>
+    </div>
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">⚙️ إعدادات عامة للتطبيق</h3>
+      <div class="field"><label>اسم التطبيق المعروض</label><input id="as_appName" value="${g('appName','وصلني')}"></div>
+      <div class="field"><label>بريد الدعم</label><input id="as_supportEmail" value="${g('supportEmail','support@wasalni.app')}"></div>
+      <div class="field"><label>رقم تواصل الدعم</label><input id="as_supportPhone" value="${g('supportPhone','+966500000000')}"></div>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1"><label>أدنى أجرة (﷼)</label><input id="as_minFare" type="number" value="${g('minFare','5')}"></div>
+        <div class="field" style="flex:1"><label>أقصى مقاعد للرحلة</label><input id="as_maxSeats" type="number" value="${g('maxSeats','4')}"></div>
+      </div>
+      <button class="btn btn-pri" onclick="saveAppSettings()">حفظ الإعدادات العامة</button>
+      <div id="asMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">💵 سياسة التسعير والمحفظة</h3>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1"><label>رسوم الخدمة الثابتة (﷼)</label><input id="as_serviceFee" type="number" step="0.5" value="${g('serviceFee','0')}"></div>
+        <div class="field" style="flex:1"><label>رسوم الإلغاء (﷼)</label><input id="as_cancelFee" type="number" step="0.5" value="${g('cancelFee','0')}"></div>
+      </div>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1"><label>أدنى شحن للمحفظة (﷼)</label><input id="as_minTopup" type="number" value="${g('minTopup','20')}"></div>
+        <div class="field" style="flex:1"><label>أدنى سحب للسائق (﷼)</label><input id="as_minWithdraw" type="number" value="${g('minWithdraw','50')}"></div>
+      </div>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>السماح بالدفع نقدًا للسائق</span>
+        <input type="checkbox" id="as_allowCash" ${appS.allowCash!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <button class="btn btn-pri" onclick="savePricing()">حفظ سياسة التسعير</button>
+      <div id="prMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">🔐 الأمان والمصادقة</h3>
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1"><label>مدة صلاحية رمز OTP (دقائق)</label><input id="as_otpTtl" type="number" value="${g('otpTtl','5')}"></div>
+        <div class="field" style="flex:1"><label>أقصى محاولات OTP</label><input id="as_otpMax" type="number" value="${g('otpMax','5')}"></div>
+      </div>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>إلزام التحقق من الهوية للسائقين</span>
+        <input type="checkbox" id="as_requireKyc" ${appS.requireKyc!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--orange)"></label>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>السماح بتسجيل الدخول عبر Apple/Google</span>
+        <input type="checkbox" id="as_socialLogin" ${appS.socialLogin!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <button class="btn btn-pri" onclick="saveSecurity()">حفظ إعدادات الأمان</button>
+      <div id="secMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">🔔 الإشعارات الافتراضية</h3>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>إشعارات الرحلات (Push)</span>
+        <input type="checkbox" id="as_pushTrips" ${appS.pushTrips!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>إشعارات العروض والتخفيضات</span>
+        <input type="checkbox" id="as_pushPromos" ${appS.pushPromos!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <label class="row" style="cursor:pointer;margin-bottom:16px;justify-content:space-between">
+        <span>ملخّص أسبوعي بالبريد</span>
+        <input type="checkbox" id="as_weeklyEmail" ${appS.weeklyEmail==='1'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <button class="btn btn-pri" onclick="saveNotifPrefs()">حفظ تفضيلات الإشعارات</button>
+      <div id="npMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">📄 روابط ونصوص قانونية</h3>
+      <div class="field"><label>رابط الشروط والأحكام</label><input id="as_termsUrl" value="${g('termsUrl','https://wasalni.app/terms')}"></div>
+      <div class="field"><label>رابط سياسة الخصوصية</label><input id="as_privacyUrl" value="${g('privacyUrl','https://wasalni.app/privacy')}"></div>
+      <div class="field"><label>اسم الشركة المُشغّلة</label><input id="as_company" value="${g('company','شركة وصلني للتقنية')}"></div>
+      <div class="field"><label>الرقم الضريبي / السجل التجاري</label><input id="as_taxId" value="${g('taxId','')}"></div>
+      <button class="btn btn-pri" onclick="saveLegal()">حفظ المعلومات القانونية</button>
+      <div id="lgMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">🛡️ التشغيل والصيانة</h3>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>وضع الصيانة (إيقاف الحجوزات مؤقتًا)</span>
+        <input type="checkbox" id="as_maintenance" ${appS.maintenance==='1'?'checked':''} style="width:20px;height:20px;accent-color:var(--orange)"></label>
+      <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
+        <span>السماح بتسجيل سائقين جدد</span>
+        <input type="checkbox" id="as_allowDrivers" ${appS.allowDrivers!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <label class="row" style="cursor:pointer;margin-bottom:16px;justify-content:space-between">
+        <span>إظهار العروض الترويجية في التطبيق</span>
+        <input type="checkbox" id="as_showPromos" ${appS.showPromos!=='0'?'checked':''} style="width:20px;height:20px;accent-color:var(--blue)"></label>
+      <button class="btn btn-pri" onclick="saveToggles()">حفظ خيارات التشغيل</button>
+      <div id="tgMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+  </div>`;
+}
+async function saveAppSettings(){
+  const b={appName:$('#as_appName').value,supportEmail:$('#as_supportEmail').value,supportPhone:$('#as_supportPhone').value,minFare:$('#as_minFare').value,maxSeats:$('#as_maxSeats').value};
+  await _saveAS(b,'#asMsg','الإعدادات العامة');
+}
+async function savePricing(){
+  const b={serviceFee:$('#as_serviceFee').value,cancelFee:$('#as_cancelFee').value,minTopup:$('#as_minTopup').value,minWithdraw:$('#as_minWithdraw').value,allowCash:$('#as_allowCash').checked?'1':'0'};
+  await _saveAS(b,'#prMsg','سياسة التسعير');
+}
+async function saveSecurity(){
+  const b={otpTtl:$('#as_otpTtl').value,otpMax:$('#as_otpMax').value,requireKyc:$('#as_requireKyc').checked?'1':'0',socialLogin:$('#as_socialLogin').checked?'1':'0'};
+  await _saveAS(b,'#secMsg','إعدادات الأمان');
+}
+async function saveNotifPrefs(){
+  const b={pushTrips:$('#as_pushTrips').checked?'1':'0',pushPromos:$('#as_pushPromos').checked?'1':'0',weeklyEmail:$('#as_weeklyEmail').checked?'1':'0'};
+  await _saveAS(b,'#npMsg','تفضيلات الإشعارات');
+}
+async function saveLegal(){
+  const b={termsUrl:$('#as_termsUrl').value,privacyUrl:$('#as_privacyUrl').value,company:$('#as_company').value,taxId:$('#as_taxId').value};
+  await _saveAS(b,'#lgMsg','المعلومات القانونية');
+}
+async function _saveAS(body,msgSel,label){
+  const m=$(msgSel);
+  try{ await apiSend('/app-settings','PATCH',body); if(m){ m.textContent='✓ حُفظت '+label; m.style.color='var(--green)'; } toast('✓ حُفظت '+label); }
+  catch(e){ if(m){ m.textContent=e.message; m.style.color='var(--red)'; } }
+}
+async function saveAppSettings(){
+  const b={appName:$('#as_appName').value,supportEmail:$('#as_supportEmail').value,supportPhone:$('#as_supportPhone').value,minFare:$('#as_minFare').value,maxSeats:$('#as_maxSeats').value};
+  try{ await apiSend('/app-settings','PATCH',b); $('#asMsg').textContent='✓ حُفظت الإعدادات العامة'; $('#asMsg').style.color='var(--green)'; }
+  catch(e){ $('#asMsg').textContent=e.message; $('#asMsg').style.color='var(--red)'; }
+}
+async function saveToggles(){
+  const b={maintenance:$('#as_maintenance').checked?'1':'0',allowDrivers:$('#as_allowDrivers').checked?'1':'0',showPromos:$('#as_showPromos').checked?'1':'0'};
+  try{ await apiSend('/app-settings','PATCH',b); $('#tgMsg').textContent='✓ حُفظت خيارات التشغيل'; $('#tgMsg').style.color='var(--green)'; }
+  catch(e){ $('#tgMsg').textContent=e.message; $('#tgMsg').style.color='var(--red)'; }
+}
+async function saveCommission(){
+  const v=+$('#crInput').value/100;
+  try{ const r=await apiSend('/settings','PATCH',{commissionRate:v}); $('#crMsg').textContent='✓ حُفظت — العمولة الآن '+Math.round(r.commissionRate*100)+'%'; $('#crMsg').style.color='var(--green)'; updateBadge(); }
+  catch(e){ $('#crMsg').textContent=e.message; $('#crMsg').style.color='var(--red)'; }
+}
+async function saveCountries(){
+  const sc=[...document.querySelectorAll('#ccList input:checked')].map(i=>i.value);
+  try{ await apiSend('/settings','PATCH',{serviceCountries:sc}); $('#ccMsg').textContent='✓ حُفظت الدول المُفعّلة'; $('#ccMsg').style.color='var(--green)'; }
+  catch(e){ $('#ccMsg').textContent=e.message; $('#ccMsg').style.color='var(--red)'; }
+}
+
+// إقلاع: استرجاع الجلسة + الثيم
+(function(){
+  const th=localStorage.getItem('wasalni_theme'); if(th) document.documentElement.dataset.theme=th;
+  const saved=localStorage.getItem('wasalni_admin');
+  if(saved){ try{ const d=JSON.parse(saved); S.api=d.api; S.token=d.token; $('#apiUrl').value=d.api;
+    // تحقّق سريع من صلاحية الجلسة
+    fetch(S.api+'/api/admin/stats',{headers:{Authorization:'Bearer '+S.token}}).then(r=>{ if(r.ok){enterApp();updateBadge();refreshSupBadge();refreshWdBadge();} }).catch(()=>{});
+  }catch(e){} }
+})();
+
+// ---------- تنزيل تصدير CSV ----------
+async function exportCsv(kind){
+  try{
+    const r=await fetch(S.api+'/api/admin/export/'+kind,{headers:{Authorization:'Bearer '+S.token}});
+    if(!r.ok) throw new Error('تعذّر التصدير');
+    const blob=await r.blob(); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='wasalni-'+kind+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }catch(e){ alert(e.message); }
+}
+// ---------- فلترة جدول حيّة ----------
+function filterTable(input, tableId){
+  const q=input.value.trim().toLowerCase();
+  document.querySelectorAll('#'+tableId+' tbody tr').forEach(tr=>{
+    tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function searchBar(tableId, placeholder, exportKind){
+  return `<div class="row" style="gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    <input class="inp" style="max-width:320px;flex:1" placeholder="${placeholder||'بحث…'}" oninput="filterTable(this,'${tableId}')"/>
+    ${exportKind?`<button class="btn btn-gh" onclick="exportCsv('${exportKind}')">⬇ تصدير CSV</button>`:''}
+  </div>`;
+}
+// ---------- رسم بياني خطّي/عمودي بسيط (SVG، بلا مكتبات) ----------
+function barChart(data, opts){
+  opts=opts||{}; const W=opts.w||520, H=opts.h||180, pad=28;
+  const vals=data.map(d=>d.v), max=Math.max(1,...vals);
+  const bw=(W-pad*2)/data.length;
+  const bars=data.map((d,i)=>{
+    const h=(d.v/max)*(H-pad*2), x=pad+i*bw+bw*0.18, y=H-pad-h, w=bw*0.64;
+    return `<rect x="${x}" y="${y}" width="${w}" height="${Math.max(1,h)}" rx="4" fill="${opts.color||'#1E5BC2'}"></rect>
+      <text x="${x+w/2}" y="${H-pad+14}" text-anchor="middle" font-size="10" fill="#8FA0BE">${esc(d.l)}</text>
+      <text x="${x+w/2}" y="${y-5}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${d.v?fmt(d.v):''}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;overflow:visible">${bars}</svg>`;
+}
+function donut(parts, opts){
+  opts=opts||{}; const total=parts.reduce((a,b)=>a+b.v,0)||1; let off=0; const R=52,C=2*Math.PI*R;
+  const segs=parts.map(p=>{ const frac=p.v/total, len=frac*C; const seg=`<circle r="${R}" cx="70" cy="70" fill="none" stroke="${p.c}" stroke-width="20" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"></circle>`; off+=len; return seg; }).join('');
+  const legend=parts.map(p=>`<div class="row" style="gap:8px;margin-top:6px"><span style="width:11px;height:11px;border-radius:3px;background:${p.c};display:inline-block"></span><span class="muted" style="font-size:12.5px">${esc(p.l)}</span><span class="spacer"></span><b class="num" style="font-size:12.5px">${fmt(p.v)}</b></div>`).join('');
+  return `<div class="row" style="gap:18px;align-items:center;flex-wrap:wrap"><svg width="140" height="140" viewBox="0 0 140 140">${segs}<text x="70" y="76" text-anchor="middle" font-size="22" font-weight="800" fill="var(--ink)">${fmt(total)}</text></svg><div style="flex:1;min-width:140px">${legend}</div></div>`;
+}
+const CC_NAMES={SA:'🇸🇦 السعودية',JO:'🇯🇴 الأردن',EG:'🇪🇬 مصر',AE:'🇦🇪 الإمارات',KW:'🇰🇼 الكويت',QA:'🇶🇦 قطر',BH:'🇧🇭 البحرين',OM:'🇴🇲 عُمان'};
+const CUR={SA:'﷼',JO:'د.أ',EG:'ج.م',AE:'د.إ',KW:'د.ك',QA:'ر.ق',BH:'د.ب',OM:'ر.ع'};
+
+// ---------- صفحة الدول والتسعير ----------
+async function renderCountries(c){
+  const {countries}=await apiGet('/countries');
+  c.innerHTML = `<h2 style="margin-bottom:6px">الدول والتسعير</h2>
+    <p class="muted" style="margin-bottom:16px;font-size:13px">تحكّم لكل دولة: تفعيل الخدمة، نوع ربح المنصة (نسبة أو مبلغ مقطوع لكل رحلة)، ومعدّل سعر المقعد لكل كيلومتر مع سقف أعلى.</p>
+    <div class="grid g2">${countries.map(countryCard).join('')}</div>`;
+}
+function countryCard(c){
+  const cur=CUR[c.code]||'﷼';
+  const pct = Math.round((c.profitValue||0)*100);
+  const km12 = Math.min(c.pricePerKm, c.kmCap)*12;
+  // مثال حساب فعلي حسب النوع
+  const exampleFare = Math.min(c.pricePerKm, c.kmCap)*12;
+  const profitOnExample = c.profitType==='percent' ? exampleFare*(c.profitValue||0) : Math.min(c.profitValue||0, exampleFare);
+  return `<div class="card" id="cc-${c.code}" style="${c.enabled?'':'opacity:.6'}">
+    <div class="row" style="align-items:center;margin-bottom:14px">
+      <h3 style="font-size:16px">${CC_NAMES[c.code]||c.code}</h3>
+      <span class="muted" style="font-size:11px;margin-inline-start:8px">العملة: ${cur}</span>
+      <span class="spacer"></span>
+      <label class="row" style="gap:8px;cursor:pointer"><span class="muted" style="font-size:12px">${c.enabled?'مُفعّلة':'موقوفة'}</span>
+        <input type="checkbox" ${c.enabled?'checked':''} onchange="saveCountry('${c.code}',{enabled:this.checked})" style="width:20px;height:20px;accent-color:var(--green)"></label>
+    </div>
+
+    <div class="muted" style="font-size:12px;margin-bottom:6px">نوع ربح المنصّة</div>
+    <div class="row" style="gap:8px;margin-bottom:12px">
+      <button class="btn ${c.profitType==='percent'?'btn-pri':'btn-gh'}" style="flex:1" onclick="switchType('${c.code}','percent')">نسبة %</button>
+      <button class="btn ${c.profitType==='flat'?'btn-pri':'btn-gh'}" style="flex:1" onclick="switchType('${c.code}','flat')">مبلغ مقطوع</button>
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <label id="pvlbl-${c.code}">${c.profitType==='percent'?'النسبة المئوية (%)':'المبلغ لكل رحلة ('+cur+')'}</label>
+      <input id="pv-${c.code}" type="number" step="${c.profitType==='percent'?'1':'0.5'}" min="0"
+        value="${c.profitType==='percent'?pct:c.profitValue}">
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:6px 0 14px">
+    <div class="muted" style="font-size:12px;margin-bottom:8px">تسعير المقعد بالكيلومتر</div>
+    <div class="row" style="gap:10px;margin-bottom:14px">
+      <div class="field" style="flex:1;margin:0"><label>سعر/كم (${cur})</label>
+        <input id="ppk-${c.code}" type="number" step="0.1" min="0" value="${c.pricePerKm}"></div>
+      <div class="field" style="flex:1;margin:0"><label>السقف الأعلى/كم (${cur})</label>
+        <input id="cap-${c.code}" type="number" step="0.1" min="0" value="${c.kmCap}"></div>
+    </div>
+
+    <div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.9">
+      <b style="color:var(--navy)">📐 نظام الحساب لهذه الدولة:</b><br>
+      • سعر المقعد = سعر/كم (${c.pricePerKm} ${cur}) × المسافة، بسقف ${c.kmCap} ${cur}/كم<br>
+      • ربح المنصّة = ${c.profitType==='percent'?`<b>${pct}%</b> من قيمة الرحلة`:`<b>${fmt(c.profitValue)} ${cur}</b> ثابت لكل رحلة`}<br>
+      • <span class="muted">مثال رحلة 12كم ≈ ${fmt(exampleFare)} ${cur} → ربح المنصّة ≈ <b>${fmt(profitOnExample)} ${cur}</b></span>
+    </div>
+
+    <div class="row" style="gap:8px;align-items:center">
+      <button class="btn btn-pri" onclick="saveCountryFull('${c.code}')">💾 حفظ إعدادات ${CC_NAMES[c.code]?CC_NAMES[c.code].split(' ')[1]||'':''}</button>
+      <span class="spacer"></span>
+      <span id="ccmsg-${c.code}" class="muted" style="font-size:11.5px"></span>
+    </div>
+  </div>`;
+}
+let _ccDraftType={};
+function setProfitType(code,type){ switchType(code,type); }
+// تبديل النوع محليًّا فقط (بلا حفظ قسري ولا دوس على القيمة)
+function switchType(code, type){
+  _ccDraftType[code]=type;
+  const card=document.getElementById('cc-'+code);
+  if(!card) return;
+  // حدّث أزرار النوع
+  const btns=card.querySelectorAll('.btn');
+  // الزرّان الأولان هما نسبة/مقطوع
+  const pctBtn=[...btns].find(b=>b.textContent.includes('نسبة'));
+  const flatBtn=[...btns].find(b=>b.textContent.includes('مقطوع'));
+  if(pctBtn&&flatBtn){
+    pctBtn.className='btn '+(type==='percent'?'btn-pri':'btn-gh'); pctBtn.style.flex='1';
+    flatBtn.className='btn '+(type==='flat'?'btn-pri':'btn-gh'); flatBtn.style.flex='1';
+  }
+  // حدّث تسمية الحقل وخطوته
+  const cur=CUR[code]||'﷼';
+  const lbl=document.getElementById('pvlbl-'+code);
+  const inp=document.getElementById('pv-'+code);
+  if(lbl) lbl.textContent = type==='percent'?'النسبة المئوية (%)':'المبلغ لكل رحلة ('+cur+')';
+  if(inp){ inp.step = type==='percent'?'1':'0.5'; /* نحافظ على القيمة كما هي */ }
+}
+async function saveCountry(code,patch){
+  try{ await apiSend('/countries/'+code,'PATCH',patch); render(); }
+  catch(e){ toast(e.message); }
+}
+async function saveCountryFull(code){
+  // النوع الفعلي = المسوّدة إن وُجدت، وإلا الزرّ المُفعّل حاليًّا
+  const card=document.getElementById('cc-'+code);
+  let type=_ccDraftType[code];
+  if(!type){ const pri=card.querySelector('.btn-pri'); type = (pri&&pri.textContent.includes('نسبة'))?'percent':'flat'; }
+  const pvRaw=parseFloat(document.getElementById('pv-'+code).value)||0;
+  const patch={
+    profitType: type,
+    profitValue: type==='percent'? pvRaw/100 : pvRaw,
+    pricePerKm: parseFloat(document.getElementById('ppk-'+code).value)||0,
+    kmCap: parseFloat(document.getElementById('cap-'+code).value)||0,
+  };
+  const msg=document.getElementById('ccmsg-'+code);
+  try{
+    await apiSend('/countries/'+code,'PATCH',patch);
+    delete _ccDraftType[code];
+    if(msg){ msg.textContent='✓ حُفظت'; msg.style.color='var(--green)'; }
+    toast('تم حفظ إعدادات '+(CC_NAMES[code]||code));
+    setTimeout(render, 600);
+  }catch(e){ if(msg){ msg.textContent=e.message; msg.style.color='var(--red)'; } else toast(e.message); }
+}
+// ============ الخريطة والعمليات ============
+async function renderOperations(c){
+  const o=await apiGet('/operations');
+  const s=o.summary;
+  c.innerHTML=`
+    <div class="grid g3" style="margin-bottom:18px">
+      ${stat('رحلات نشطة',s.activeTrips,'🛣','b-bl','قيد التشغيل الآن')}
+      ${stat('حجوزات حيّة',s.liveBookings,'🎫','b-or','ركّاب في رحلات')}
+      ${stat('سائقون',s.onlineDrivers,'🚗','b-gr','إجمالي السائقين')}
+    </div>
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:14px">🗺 الرحلات النشطة وطلباتها</h3>
+      ${o.activeTrips.length? o.activeTrips.map(t=>`
+        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <b>${esc(t.driver_name||'سائق')} · ${esc(t.from_label||'')} ← ${esc(t.to_label||'')}</b>
+            <span class="tag t-bl">${esc(t.status)}</span>
+          </div>
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(t.time||'')} · ${t.total_seats} مقاعد · ${fmt(t.price_per_seat)} لكل مقعد</div>
+          ${(t.requests||[]).length? `<div style="display:flex;flex-wrap:wrap;gap:6px">${t.requests.map(r=>`<span class="tag ${r.status==='accepted'?'t-gr':'t-am'}">${esc(r.passenger_name)} · ${esc(r.status)}</span>`).join('')}</div>`:'<div class="muted" style="font-size:12px">لا طلبات بعد</div>'}
+        </div>`).join('') : '<div class="empty">لا توجد رحلات نشطة حاليًا</div>'}
+    </div>`;
+}
+
+// ============ الدعم ============
+async function renderSupport(c){
+  const d=await apiGet('/support');
+  const open=d.tickets.filter(t=>t.status==='open');
+  c.innerHTML=`
+    <div class="grid g3" style="margin-bottom:18px">
+      ${stat('تذاكر مفتوحة',open.length,'💬','b-am','بانتظار الرد')}
+      ${stat('إجمالي التذاكر',d.tickets.length,'📨','b-bl','كل الوقت')}
+      ${stat('مغلقة',d.tickets.length-open.length,'✓','b-gr','تمّت معالجتها')}
+    </div>
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:14px">تذاكر الدعم</h3>
+      ${d.tickets.length? d.tickets.map(t=>`
+        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
+          <div class="row" style="justify-content:space-between;margin-bottom:6px">
+            <b>${esc(t.subject)}</b>
+            <span class="tag ${t.status==='open'?'t-am':'t-gr'}">${t.status==='open'?'مفتوحة':'مغلقة'}</span>
+          </div>
+          <div class="muted" style="font-size:12.5px;margin-bottom:4px">${esc(t.user_name||'مستخدم')}</div>
+          <div style="font-size:13.5px;margin-bottom:10px">${esc(t.message)}</div>
+          ${t.reply?`<div style="background:var(--bg);border-radius:8px;padding:8px;font-size:12.5px;margin-bottom:10px"><b>الرد:</b> ${esc(t.reply)}</div>`:''}
+          ${t.status==='open'?`
+            <div class="row" style="gap:8px">
+              <input id="rep_${t.id}" placeholder="اكتب ردًّا..." style="flex:1;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+              <button class="btn btn-pri" onclick="replySupport('${t.id}')">رد وإغلاق</button>
+            </div>`:''}
+        </div>`).join('') : '<div class="empty">لا توجد تذاكر دعم</div>'}
+    </div>`;
+}
+async function replySupport(id){
+  const reply=$('#rep_'+id).value.trim();
+  if(!reply){ toast('اكتب ردًّا أولًا'); return; }
+  try{ await apiSend('/support/'+id,'PATCH',{status:'closed',reply}); toast('✓ أُرسل الرد وأُغلقت التذكرة'); refreshSupBadge(); render(); }
+  catch(e){ toast(e.message); }
+}
+
+// ============ العروض ============
+async function renderPromos(c){
+  const d=await apiGet('/promos');
+  c.innerHTML=`
+    <div class="grid g2">
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">🎁 إنشاء عرض جديد</h3>
+        <div class="field"><label>الكود (مثال: WELCOME10)</label><input id="pcode" style="text-transform:uppercase"></div>
+        <div class="field"><label>عنوان العرض</label><input id="ptitle" placeholder="خصم ترحيبي"></div>
+        <div class="row" style="gap:10px">
+          <div class="field" style="flex:1"><label>نوع الخصم</label>
+            <select id="ptype"><option value="percent">نسبة %</option><option value="flat">مبلغ ثابت</option></select></div>
+          <div class="field" style="flex:1"><label>القيمة</label><input id="pval" type="number" min="0" value="10"></div>
+        </div>
+        <div class="row" style="gap:10px">
+          <div class="field" style="flex:1"><label>أقصى استخدام (0=بلا حد)</label><input id="pmax" type="number" min="0" value="0"></div>
+          <div class="field" style="flex:1"><label>الدولة (اختياري)</label><input id="pcountry" placeholder="SA"></div>
+        </div>
+        <button class="btn btn-pri" onclick="createPromo()">إنشاء العرض</button>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">العروض الحالية (${d.promos.length})</h3>
+        ${d.promos.length? d.promos.map(p=>`
+          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
+            <div class="row" style="justify-content:space-between;margin-bottom:6px">
+              <b style="font-family:monospace;font-size:15px">${esc(p.code)}</b>
+              <span class="tag ${p.active?'t-gr':'t-am'}">${p.active?'مُفعّل':'موقوف'}</span>
+            </div>
+            <div style="font-size:13px;margin-bottom:4px">${esc(p.title)}</div>
+            <div class="muted" style="font-size:12px;margin-bottom:8px">${p.discount_type==='percent'?p.discount_value+'%':fmt(p.discount_value)+' خصم'} · استُخدم ${p.used_count}${p.max_uses?'/'+p.max_uses:''}${p.country?' · '+esc(p.country):''}</div>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-gh" onclick="togglePromo('${p.id}',${p.active?'false':'true'})">${p.active?'إيقاف':'تفعيل'}</button>
+              <button class="btn btn-gh" style="color:var(--red)" onclick="delPromo('${p.id}')">حذف</button>
+            </div>
+          </div>`).join('') : '<div class="empty">لا توجد عروض بعد</div>'}
+      </div>
+    </div>`;
+}
+async function createPromo(){
+  const b={code:$('#pcode').value.trim(),title:$('#ptitle').value.trim(),discountType:$('#ptype').value,discountValue:+$('#pval').value,maxUses:+$('#pmax').value,country:$('#pcountry').value.trim()||null};
+  if(!b.code||!b.title){ toast('الكود والعنوان مطلوبان'); return; }
+  try{ await apiSend('/promos','POST',b); toast('✓ أُنشئ العرض'); render(); }
+  catch(e){ toast(e.message); }
+}
+async function togglePromo(id,active){ try{ await apiSend('/promos/'+id,'PATCH',{active:active==='true'||active===true}); render(); }catch(e){ toast(e.message); } }
+async function delPromo(id){ try{ await apiSend('/promos/'+id,'DELETE'); toast('حُذف العرض'); render(); }catch(e){ toast(e.message); } }
+
+// ============ الإشعارات الإدارية ============
+async function renderAdminNotifs(c){
+  const d=await apiGet('/notifications');
+  c.innerHTML=`
+    <div class="grid g2">
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">🔔 إرسال إشعار جماعي</h3>
+        <div class="field"><label>العنوان</label><input id="ntitle" placeholder="عرض جديد!"></div>
+        <div class="field"><label>النص</label><textarea id="nbody" rows="3" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;resize:vertical"></textarea></div>
+        <div class="field"><label>الجمهور المستهدف</label>
+          <select id="naud"><option value="all">كل المستخدمين</option><option value="passengers">الركّاب فقط</option><option value="drivers">السائقون فقط</option></select></div>
+        <button class="btn btn-pri" onclick="sendBroadcast()">إرسال الإشعار</button>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">سجلّ الإشعارات المُرسلة</h3>
+        ${d.notifications.length? d.notifications.map(n=>`
+          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
+            <div class="row" style="justify-content:space-between;margin-bottom:4px"><b>${esc(n.title)}</b>
+              <span class="tag t-bl">${n.audience==='all'?'الجميع':n.audience==='drivers'?'السائقون':'الركّاب'}</span></div>
+            <div style="font-size:13px;margin-bottom:4px">${esc(n.body)}</div>
+            <div class="muted" style="font-size:11.5px">أُرسل لـ ${n.sent_count} مستخدم</div>
+          </div>`).join('') : '<div class="empty">لم تُرسل إشعارات بعد</div>'}
+      </div>
+    </div>`;
+}
+async function sendBroadcast(){
+  const b={title:$('#ntitle').value.trim(),body:$('#nbody').value.trim(),audience:$('#naud').value};
+  if(!b.title||!b.body){ toast('العنوان والنص مطلوبان'); return; }
+  try{ const r=await apiSend('/notifications','POST',b); toast('✓ أُرسل لـ '+r.sent+' مستخدم'); render(); }
+  catch(e){ toast(e.message); }
+}
+
+// ============ الأدوار والصلاحيات ============
+const ALL_PERMS={operations:'العمليات',users:'المستخدمون',trips:'الرحلات',reports:'البلاغات',support:'الدعم',promos:'العروض',finance:'المالية',countries:'الدول',settings:'الإعدادات'};
+async function renderTeam(c){
+  const d=await apiGet('/team');
+  c.innerHTML=`
+    <div class="grid g2">
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">👥 إضافة عضو للفريق</h3>
+        <div class="field"><label>اسم المستخدم</label><input id="tuser" placeholder="sara"></div>
+        <div class="field"><label>الاسم الكامل</label><input id="tname" placeholder="سارة الأحمد"></div>
+        <div class="field"><label>الدور</label>
+          <select id="trole"><option value="admin">مدير</option><option value="support">دعم</option><option value="finance">مالية</option><option value="moderator">مشرف</option></select></div>
+        <div class="field"><label>الصلاحيات</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">${Object.entries(ALL_PERMS).map(([k,v])=>`<label class="row" style="cursor:pointer;font-size:13px"><input type="checkbox" class="tperm" value="${k}" style="width:16px;height:16px;accent-color:var(--blue)"> ${v}</label>`).join('')}</div></div>
+        <button class="btn btn-pri" onclick="addMember()">إضافة العضو</button>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;margin-bottom:14px">أعضاء الفريق (${d.team.length})</h3>
+        ${d.team.length? d.team.map(m=>`
+          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
+            <div class="row" style="justify-content:space-between;margin-bottom:6px">
+              <div><b>${esc(m.name)}</b> <span class="muted" style="font-size:12px">@${esc(m.username)}</span></div>
+              <span class="tag ${m.active?'t-gr':'t-am'}">${m.active?'نشط':'موقوف'}</span>
+            </div>
+            <div class="muted" style="font-size:12px;margin-bottom:6px">${esc(m.role)} · ${m.permissions.length?m.permissions.map(p=>ALL_PERMS[p]||p).join('، '):'بلا صلاحيات'}</div>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-gh" onclick="toggleMember('${m.id}',${m.active?'false':'true'})">${m.active?'إيقاف':'تفعيل'}</button>
+              <button class="btn btn-gh" style="color:var(--red)" onclick="delMember('${m.id}')">حذف</button>
+            </div>
+          </div>`).join('') : '<div class="empty">لا أعضاء بعد — أضف أول عضو</div>'}
+      </div>
+    </div>`;
+}
+async function addMember(){
+  const perms=[...document.querySelectorAll('.tperm:checked')].map(i=>i.value);
+  const b={username:$('#tuser').value.trim(),name:$('#tname').value.trim(),role:$('#trole').value,permissions:perms};
+  if(!b.username||!b.name){ toast('اسم المستخدم والاسم مطلوبان'); return; }
+  try{ await apiSend('/team','POST',b); toast('✓ أُضيف العضو'); render(); }
+  catch(e){ toast(e.message); }
+}
+async function toggleMember(id,active){ try{ await apiSend('/team/'+id,'PATCH',{active:active==='true'||active===true}); render(); }catch(e){ toast(e.message); } }
+async function delMember(id){ try{ await apiSend('/team/'+id,'DELETE'); toast('حُذف العضو'); render(); }catch(e){ toast(e.message); } }
+
+async function refreshSupBadge(){ try{ const d=await apiGet('/support'); const n=d.tickets.filter(t=>t.status==='open').length; const b=$('#supBadge'); if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
+
+function toast(msg){ let t=document.getElementById('_toast'); if(!t){ t=document.createElement('div'); t.id='_toast'; t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0F2F72;color:#fff;padding:11px 20px;border-radius:12px;font-weight:600;font-size:13.5px;z-index:99;box-shadow:0 8px 24px rgba(0,0,0,.25)'; document.body.appendChild(t);} t.textContent=msg; t.style.opacity='1'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity='0',2200); }
+
+
+const REP_CAT_COLORS = { 'سلوك غير لائق':'#EF4444','مشكلة أمان':'#EF4444','مشكلة في الدفع':'#FFB35A' };
+async function renderReports(c){
+  const { reports } = await apiGet('/reports');
+  if(!reports.length){ c.innerHTML='<div class="card"><div class="muted" style="text-align:center;padding:30px">لا توجد بلاغات</div></div>'; return; }
+  c.innerHTML = searchBar('tblReports','بحث في البلاغات…') + `<div id="tblReports">${reports.map(repCard).join('')}</div>`;
+}
+function repCard(r){
+  const when = new Date(r.at).toLocaleString('ar');
+  const open = r.status==='open';
+  return `<div class="card rep-card ${open?'':'resolved'}" style="margin-bottom:12px">
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1">
+        <div class="row" style="gap:8px;align-items:center;margin-bottom:4px">
+          <b style="font-size:14.5px">${esc(r.category)}</b>
+          <span class="badge ${open?'b-amber':'b-green'}">${open?'مفتوح':'مُعالَج'}</span>
+          <span class="badge b-blue">${r.reporterRole==='driver'?'سائق':'راكب'}</span>
+        </div>
+        <div class="muted" style="font-size:13px;margin-bottom:3px">من: ${esc(r.reporter)} · ${esc(r.reporterPhone||'')}${r.against?' · <b style="color:var(--red)">ضد: '+esc(r.against)+'</b>':''}</div>
+        ${r.note?`<div style="font-size:13px;margin:6px 0;background:var(--surface2);padding:8px 12px;border-radius:10px">${esc(r.note)}</div>`:''}
+        ${r.reply?`<div style="font-size:13px;margin:6px 0;background:#E8F5EE;padding:8px 12px;border-radius:10px"><b>ردّ الإدارة:</b> ${esc(r.reply)}</div>`:''}
+        <div class="muted" style="font-size:11.5px">${when}${r.tripId?' · رحلة #'+r.tripId:''}</div>
+      </div>
+      <div class="row" style="gap:8px">
+        <button class="btn btn-gh" onclick="replyReportForm(${r.id})">↩ رد</button>
+        ${open
+          ? `<button class="btn btn-pri" onclick="resolveReport(${r.id})">وضع كمُعالَج</button>`
+          : `<button class="btn btn-gh" onclick="reopenReport(${r.id})">إعادة فتح</button>`}
+      </div>
+    </div>
+  </div>`;
+}
+async function resolveReport(id){ try{ await apiSend('/reports/'+id,'PATCH',{status:'resolved'}); toast('تم وضع البلاغ كمُعالَج'); render(); refreshRepBadge(); }catch(e){ alert(e.message); } }
+async function reopenReport(id){ try{ await apiSend('/reports/'+id,'PATCH',{status:'open'}); render(); refreshRepBadge(); }catch(e){ alert(e.message); } }
+function replyReportForm(id){
+  openModal('الرد على البلاغ', `
+    <p class="muted" style="font-size:13px;margin-bottom:12px">يصل ردّك للمُبلِّغ كإشعار في التطبيق.</p>
+    <div class="field"><label>نص الرد</label>
+      <textarea id="rr_text" rows="4" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;resize:vertical"></textarea></div>
+    <label class="row" style="cursor:pointer;margin-bottom:14px"><input type="checkbox" id="rr_resolve" checked style="width:18px;height:18px;accent-color:var(--green)"> <span>وضع البلاغ كمُعالَج بعد الرد</span></label>
+    <button class="btn btn-pri" onclick="sendReportReply(${id})">إرسال الرد</button>
+    <button class="btn btn-gh" onclick="closeModal()">إلغاء</button>
+    <div id="rrMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+  `);
+}
+async function sendReportReply(id){
+  const reply=$('#rr_text').value.trim();
+  if(!reply){ $('#rrMsg').textContent='اكتب نص الرد'; $('#rrMsg').style.color='var(--red)'; return; }
+  const body={reply}; if($('#rr_resolve').checked) body.status='resolved';
+  try{ await apiSend('/reports/'+id,'PATCH',body); $('#rrMsg').textContent='✓ أُرسل الرد للمُبلِّغ'; $('#rrMsg').style.color='var(--green)'; setTimeout(()=>{closeModal();render();refreshRepBadge();},800); }
+  catch(e){ $('#rrMsg').textContent=e.message; $('#rrMsg').style.color='var(--red)'; }
+}
+async function refreshRepBadge(){
+  try{ const s=await apiGet('/stats'); const b=$('#repBadge'); if(b){ if(s.openReports>0){ b.textContent=s.openReports; b.style.display='inline-block'; } else b.style.display='none'; } }catch(e){}
+}
+
+</script>
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalTitle"></h3><button class="modal-x" onclick="closeModal()">×</button></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+</body>
+</html>

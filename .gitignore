@@ -1,0 +1,12 @@
+node_modules/
+wasalni.db
+wasalni.db-shm
+wasalni.db-wal
+*.db
+*.db-*
+.env
+.DS_Store
+webapp.html.bak
+uploads/
+dist/
+*.log
