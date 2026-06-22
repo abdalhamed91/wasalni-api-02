@@ -85,6 +85,13 @@ r.post('/me/verify-request', async (req, res) => {
   res.json({ user: await publicUser(u), verifyStatus: 'submitted' });
 });
 
+// حفظ توكن الإشعارات الفورية للجهاز
+r.post('/me/push-token', async (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 200).trim();
+  await db.execute('UPDATE users SET push_token=? WHERE id=?', [token || null, req.user.id]);
+  res.json({ ok: true });
+});
+
 r.put('/me/vehicle', async (req, res) => {
   const { make, model, year, color, plate, capacity } = req.body || {};
   await db.execute(`INSERT INTO vehicles (user_id,make,model,year,color,plate,capacity) VALUES (?,?,?,?,?,?,?)

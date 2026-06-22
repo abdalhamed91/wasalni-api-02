@@ -250,6 +250,8 @@ async function runMigrations() {
   await ensureColumn('trips', 'driver_lat', 'REAL');
   await ensureColumn('trips', 'driver_lng', 'REAL');
   await ensureColumn('trips', 'driver_loc_at', PG ? 'BIGINT' : 'INTEGER');
+  // توكن الإشعارات الفورية (Expo Push)
+  await ensureColumn('users', 'push_token', 'TEXT');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

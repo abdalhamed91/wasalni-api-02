@@ -33,6 +33,8 @@ async function addTxn(userId, scope, title, amount, kind) {
 async function addNotif(userId, icon, tone, title, sub, toRoute = null) {
   await db.execute('INSERT INTO notifications (user_id,icon,tone,title,sub,to_route,created_at) VALUES (?,?,?,?,?,?,?)',
     [userId, icon, tone, title, sub, toRoute, now()]);
+  // إشعار فوري للجهاز (إن وُجد توكن) — بلا انتظار حتى لا يبطّئ الطلب
+  try { require('./push').pushToUser(userId, title, sub, toRoute ? { to: toRoute } : undefined); } catch (e) {}
 }
 
 async function ensureSeedForUser(userId, name) {
