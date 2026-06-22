@@ -324,6 +324,34 @@ r.post('/trips/:id/start', async (req, res) => {
   res.json({ ok: true });
 });
 
+// السائق يبثّ موقعه اللحظي أثناء الرحلة
+r.post('/trips/:id/location', async (req, res) => {
+  const trip = await ownTrip(req, res); if (!trip) return;
+  const lat = Number(req.body?.lat), lng = Number(req.body?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return bad(res, 'إحداثيات غير صالحة');
+  await db.execute('UPDATE trips SET driver_lat=?, driver_lng=?, driver_loc_at=? WHERE id=?', [lat, lng, now(), trip.id]);
+  res.json({ ok: true });
+});
+
+// الراكب يتتبّع موقع سائق رحلته المحجوزة
+r.get('/bookings/:id/track', async (req, res) => {
+  const b = await db.queryOne('SELECT * FROM bookings WHERE id=?', [Number(req.params.id)]);
+  if (!b) return bad(res, 'الحجز غير موجود', 404);
+  if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  let trip = null;
+  if (b.request_id) {
+    trip = await db.queryOne('SELECT t.* FROM trips t JOIN requests r ON r.trip_id=t.id WHERE r.id=?', [b.request_id]);
+  }
+  const hasLoc = trip && trip.driver_lat != null && trip.driver_lng != null;
+  res.json({
+    status: trip ? trip.status : b.status,
+    driver: hasLoc ? [trip.driver_lat, trip.driver_lng] : null,
+    locAt: trip ? trip.driver_loc_at : null,
+    fromCoord: trip ? [trip.from_lat, trip.from_lng] : null,
+    toCoord: trip ? [trip.to_lat, trip.to_lng] : null,
+  });
+});
+
 r.post('/trips/:id/complete', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   if (trip.status !== 'live' && trip.status !== 'scheduled') return bad(res, 'الرحلة ليست جارية');

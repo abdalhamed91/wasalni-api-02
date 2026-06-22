@@ -63,6 +63,7 @@ const TABLES = [
     total_seats ${INT} NOT NULL,
     gender_pref TEXT DEFAULT 'any',
     cancel_reason TEXT,
+    driver_lat REAL, driver_lng REAL, driver_loc_at ${INT},
     status TEXT NOT NULL DEFAULT 'scheduled',
     created_at ${NOW}
   )`,
@@ -245,6 +246,10 @@ async function runMigrations() {
   await ensureColumn('bookings', 'request_id', PG ? 'BIGINT' : 'INTEGER');
   // وثائق توثيق السائق (روابط الصور كـJSON)
   await ensureColumn('users', 'docs', "TEXT DEFAULT ''");
+  // موقع السائق اللحظي أثناء الرحلة
+  await ensureColumn('trips', 'driver_lat', 'REAL');
+  await ensureColumn('trips', 'driver_lng', 'REAL');
+  await ensureColumn('trips', 'driver_loc_at', PG ? 'BIGINT' : 'INTEGER');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
