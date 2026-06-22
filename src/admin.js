@@ -119,6 +119,23 @@ r.patch('/users/:id', async (req, res) => {
   res.json({ user: updated });
 });
 
+// صندوق وارد كل محادثات الدعم (آخر رسالة + هل تحتاج ردًّا)
+r.get('/conversations', async (_req, res) => {
+  const threads = await db.query(
+    "SELECT th.id, th.user_id, u.name user_name, u.phone, u.dial FROM threads th JOIN users u ON u.id=th.user_id WHERE th.peer_name='دعم وصلني' ORDER BY th.id DESC LIMIT 300", []);
+  const out = [];
+  for (const t of threads) {
+    const last = await db.queryOne('SELECT text, mine, created_at FROM messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 1', [t.id]);
+    out.push({
+      userId: t.user_id, userName: t.user_name, phone: (t.dial || '') + (t.phone || ''),
+      lastText: last ? last.text : '', lastAt: last ? last.created_at : null,
+      needsReply: last ? !!Number(last.mine) : false, // mine=1 = رسالة من المستخدم
+    });
+  }
+  out.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  res.json({ conversations: out, needsReply: out.filter(c => c.needsReply).length });
+});
+
 // قراءة محادثة الدعم مع مستخدم (لرؤية ردوده)
 r.get('/users/:id/thread', async (req, res) => {
   const id = Number(req.params.id);

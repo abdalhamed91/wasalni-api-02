@@ -132,6 +132,7 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
   <div class="nav-sep">التفاعل</div>
   <div class="nav-item" data-page="reports"><span class="ic">🚩</span> البلاغات <span id="repBadge" class="nav-badge" style="display:none"></span></div>
   <div class="nav-item" data-page="support"><span class="ic">💬</span> الدعم <span id="supBadge" class="nav-badge" style="display:none"></span></div>
+  <div class="nav-item" data-page="conversations"><span class="ic">✉️</span> الرسائل <span id="convBadge" class="nav-badge" style="display:none"></span></div>
   <div class="nav-item" data-page="promos"><span class="ic">🎁</span> العروض</div>
   <div class="nav-item" data-page="notifications"><span class="ic">🔔</span> الإشعارات</div>
   <div class="nav-sep">المال والإدارة</div>
@@ -192,17 +193,19 @@ async function doLogin(){
   }catch(e){ $('#loginErr').textContent = e.message.includes('fetch')||e.message.includes('Failed')?'تعذّر الاتصال بالخادم — تأكّد أنه يعمل':e.message; }
 }
 function logout(){ localStorage.removeItem('wasalni_admin'); location.reload(); }
-function enterApp(){ $('#login').classList.add('hidden'); $('#app-sb').classList.remove('hidden'); $('#app-main').classList.remove('hidden'); bindNav(); go('dashboard'); }
+function enterApp(){ $('#login').classList.add('hidden'); $('#app-sb').classList.remove('hidden'); $('#app-main').classList.remove('hidden'); bindNav(); go('dashboard');
+  updateBadge(); refreshSupBadge(); refreshWdBadge(); refreshConvBadge();
+  if(!S._badgeIv){ S._badgeIv=setInterval(()=>{ refreshConvBadge(); refreshSupBadge(); refreshWdBadge(); updateBadge(); },15000); } }
 
 function bindNav(){ document.querySelectorAll('.nav-item[data-page]').forEach(el=>el.onclick=()=>go(el.dataset.page)); }
 function go(page){
   S.page=page;
   document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));
-  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
+  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
   $('#pageTitle').textContent=titles[page]||page;
   render();
 }
-function refresh(){ S.cache={}; render(); updateBadge(); refreshSupBadge(); refreshWdBadge(); }
+function refresh(){ S.cache={}; render(); updateBadge(); refreshSupBadge(); refreshWdBadge(); refreshConvBadge(); }
 function toggleTheme(){ const h=document.documentElement; h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'; localStorage.setItem('wasalni_theme',h.dataset.theme); }
 
 async function updateBadge(){ try{ const s=await apiGet('/stats'); const b=$('#verifyBadge'); b.textContent=s.pendingVerify||''; b.style.display=s.pendingVerify?'inline-block':'none'; }catch(e){} }
@@ -221,6 +224,7 @@ async function render(){
     if(S.page==='withdrawals') return renderWithdrawals(c);
     if(S.page==='reports') return renderReports(c);
     if(S.page==='support') return renderSupport(c);
+    if(S.page==='conversations') return renderConversations(c);
     if(S.page==='promos') return renderPromos(c);
     if(S.page==='notifications') return renderAdminNotifs(c);
     if(S.page==='countries') return renderCountries(c);
@@ -380,6 +384,25 @@ async function saveUserEdit(id){
   try{ await apiSend('/users/'+id,'PATCH',b); $('#euMsg').textContent='✓ حُفظت التعديلات'; $('#euMsg').style.color='var(--green)'; setTimeout(()=>{closeModal();render();},700); }
   catch(e){ $('#euMsg').textContent=e.message; $('#euMsg').style.color='var(--red)'; }
 }
+async function renderConversations(c){
+  const d=await apiGet('/conversations');
+  const list=d.conversations||[];
+  c.innerHTML = `<div class="row" style="margin-bottom:12px"><h3 class="sec-title" style="margin:0">صندوق الرسائل</h3>
+    <span class="spacer"></span>${d.needsReply?`<span class="tag t-am">${d.needsReply} تحتاج ردًّا</span>`:''}</div>
+    ${list.length? list.map(v=>`
+      <div class="card" style="cursor:pointer;margin-bottom:10px" onclick="messageUserForm(${v.userId})">
+        <div class="row">
+          <span class="avatar">${esc(initials(v.userName))}</span>
+          <div style="flex:1;min-width:0">
+            <b>${esc(v.userName||'مستخدم')}</b> ${v.needsReply?'<span class="tag t-am" style="margin-inline-start:6px">جديد</span>':''}
+            <div class="muted" style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(v.lastText||'—')}</div>
+          </div>
+          <div class="muted" style="font-size:11px">${v.lastAt?new Date(v.lastAt).toLocaleString('ar'):''}</div>
+        </div>
+      </div>`).join('') : '<div class="empty">لا توجد محادثات بعد. ابدأ محادثة من «المستخدمون → تفاصيل → محادثة».</div>'}`;
+}
+async function refreshConvBadge(){ try{ const d=await apiGet('/conversations'); const b=$('#convBadge'); const n=d.needsReply||0; if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
+
 async function messageUserForm(id){
   openModal('محادثة المستخدم', '<div class="empty"><div class="spin"></div></div>');
   let msgs=[];
@@ -697,7 +720,7 @@ async function saveCountries(){
   const saved=localStorage.getItem('wasalni_admin');
   if(saved){ try{ const d=JSON.parse(saved); S.api=d.api; S.token=d.token; $('#apiUrl').value=d.api;
     // تحقّق سريع من صلاحية الجلسة
-    fetch(S.api+'/api/admin/stats',{headers:{Authorization:'Bearer '+S.token}}).then(r=>{ if(r.ok){enterApp();updateBadge();refreshSupBadge();refreshWdBadge();} }).catch(()=>{});
+    fetch(S.api+'/api/admin/stats',{headers:{Authorization:'Bearer '+S.token}}).then(r=>{ if(r.ok){enterApp();updateBadge();refreshSupBadge();refreshWdBadge();refreshConvBadge();setInterval(()=>{refreshConvBadge();refreshSupBadge();refreshWdBadge();updateBadge();},15000);} }).catch(()=>{});
   }catch(e){} }
 })();
 

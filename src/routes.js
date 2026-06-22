@@ -401,16 +401,13 @@ r.get('/pricing/quote', async (req, res) => {
 
 // ============ بحث الركّاب وحجوزاتهم ============
 r.get('/rides/search', async (req, res) => {
-  const u = await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]);
-  if (!(await serviceCountries()).includes(u.country_code)) {
-    return bad(res, 'الخدمة غير متاحة في دولتك حالياً — متاحة في السعودية والأردن ومصر', 403);
-  }
-  let to = (req.query.to || '').toString().trim();
-  // فكّ ترميز URL إن وصل مُرمَّزًا (يحدث مع النص العربي)
-  if (/%[0-9A-Fa-f]{2}/.test(to)) { try { to = decodeURIComponent(to); } catch {} }
+  const dec = (v) => { let s = (v || '').toString().trim(); if (/%[0-9A-Fa-f]{2}/.test(s)) { try { s = decodeURIComponent(s); } catch {} } return s; };
+  const to = dec(req.query.to);
+  const city = dec(req.query.city);
+  const country = dec(req.query.country).toUpperCase();
   const femaleOnly = String(req.query.femaleOnly || '') === '1';
-  // استبعاد رحلات الراكب نفسه (لا يحجز رحلته)
-  let sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.gender AS driver_gender,
+  // كل الرحلات المجدولة المتاحة (عدا رحلات الباحث نفسه) — بلا حجب حسب الدولة
+  const sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.gender AS driver_gender, d.country_code AS driver_country,
             v.make, v.model, v.color, v.plate
      FROM trips t
      JOIN users d ON d.id = t.driver_id
@@ -418,13 +415,12 @@ r.get('/rides/search', async (req, res) => {
      WHERE t.status = 'scheduled' AND t.total_seats > 0 AND t.driver_id != ?
      ORDER BY t.created_at DESC`;
   let trips = await db.query(sql, [req.user.id]);
-  // مطابقة مرنة: عند إدخال وجهة، طابق الوجهة أو الانطلاق (مسارات متقاطعة)؛ بلا إدخال = اعرض كل المتاح
-  if (to) {
-    const norm = (x) => (x || '').toString().trim().replace(/\s+/g, '');
-    const q = norm(to);
-    const hit = (label) => { const d = norm(label); return !!d && (d.includes(q) || q.includes(d)); };
-    trips = trips.filter(t => hit(t.to_label) || hit(t.from_label));
-  }
+  const norm = (x) => (x || '').toString().trim().replace(/\s+/g, '');
+  const matchLabel = (term) => { const q = norm(term); return (t) => { const a = norm(t.to_label), b = norm(t.from_label); return (!!a && (a.includes(q) || q.includes(a))) || (!!b && (b.includes(q) || q.includes(b))); }; };
+  // فلاتر اختيارية: الدولة، المدينة (الانطلاق أو الوجهة)، أو وجهة محددة
+  if (country) trips = trips.filter(t => (t.driver_country || '').toUpperCase() === country);
+  if (to) trips = trips.filter(matchLabel(to));
+  if (city) trips = trips.filter(matchLabel(city));
   if (femaleOnly) trips = trips.filter(t => t.driver_gender === 'female' || t.gender_pref === 'female');
   const rides = trips.map(t => ({
     id: t.id,
