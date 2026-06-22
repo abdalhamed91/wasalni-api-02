@@ -3,12 +3,28 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
+
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// لا تُسقِط الخادم على أي خطأ غير متوقّع — سجّله وابقَ حيًّا (تفادي Crashed)
+process.on('unhandledRejection', (e) => console.error('⚠️ unhandledRejection:', (e && e.message) || e));
+process.on('uncaughtException', (e) => console.error('⚠️ uncaughtException:', (e && e.message) || e));
+
+// اضبط الأسرار قبل تحميل الوحدات التي تقرؤها (auth/admin) — بلا إسقاط للخادم
+if (IS_PROD) {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'wasalni-dev-secret-change-in-production') {
+    process.env.JWT_SECRET = crypto.randomBytes(32).toString('hex');
+    console.warn('⚠️ JWT_SECRET غير مضبوط — وُلّد سرّ مؤقّت (ستُعاد جلسات الدخول عند كل إعادة تشغيل). اضبط JWT_SECRET ثابتًا في Railway.');
+  }
+  if (!process.env.ADMIN_SECRET || process.env.ADMIN_SECRET === 'wasalni-admin') {
+    console.warn('⚠️ ADMIN_SECRET غير مضبوط — كلمة مرور الإدارة الافتراضية (wasalni-admin). اضبط كلمة قوية في Railway.');
+  }
+}
+
 const routes = require('./src/routes');
 const adminRoutes = require('./src/admin');
-const { assertProdSecrets, securityHeaders, rateLimit, IS_PROD } = require('./src/security');
-
-// أوقف التشغيل فورًا إن كانت الأسرار افتراضية في الإنتاج
-assertProdSecrets();
+const { securityHeaders, rateLimit } = require('./src/security');
 
 const app = express();
 app.set('trust proxy', 1); // خلف وكيل Railway — ليقرأ IP العميل الحقيقي
@@ -62,13 +78,13 @@ app.use((err, _req, res, _next) => {
 
 const PORT = process.env.PORT || 4000;
 
-// هيّئ قاعدة البيانات (إنشاء الجداول والترحيل) قبل بدء الاستماع
+// هيّئ قاعدة البيانات ثم ابدأ الاستماع. وإن فشلت التهيئة، ابقَ حيًّا واعرض الخطأ
+// (تفادي حلقة الانهيار على Railway — يبقى /health يعمل ويظهر السبب في السجلّ)
 const { initDb } = require('./src/db');
+function listen() { app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`)); }
 initDb()
-  .then(() => {
-    app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`));
-  })
+  .then(listen)
   .catch((e) => {
-    console.error('فشل تهيئة قاعدة البيانات:', e.message);
-    process.exit(1);
+    console.error('❌ فشل تهيئة قاعدة البيانات:', (e && e.stack) || e);
+    listen(); // ابقَ حيًّا ليظهر الخطأ بدل إعادة التشغيل المتكرّرة
   });
