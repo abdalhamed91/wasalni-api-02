@@ -62,6 +62,7 @@ const TABLES = [
     price_per_seat REAL NOT NULL,
     total_seats ${INT} NOT NULL,
     gender_pref TEXT DEFAULT 'any',
+    kind TEXT NOT NULL DEFAULT 'city',
     cancel_reason TEXT,
     driver_lat REAL, driver_lng REAL, driver_loc_at ${INT},
     status TEXT NOT NULL DEFAULT 'scheduled',
@@ -252,6 +253,8 @@ async function runMigrations() {
   await ensureColumn('trips', 'driver_loc_at', PG ? 'BIGINT' : 'INTEGER');
   // توكن الإشعارات الفورية (Expo Push)
   await ensureColumn('users', 'push_token', 'TEXT');
+  // نوع النقل: city | intercity | public_bus | school_bus
+  await ensureColumn('trips', 'kind', "TEXT NOT NULL DEFAULT 'city'");
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

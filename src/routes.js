@@ -13,6 +13,28 @@ const { paymentsEnabled, verifyPayment } = require('./payments');
 const r = express.Router();
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
+// ===== هندسة المطابقة على المسار (corridor matching) =====
+const validPt = (p) => Array.isArray(p) && p[0] != null && p[1] != null && Number.isFinite(+p[0]) && Number.isFinite(+p[1]);
+function haversineKm(a, b) {
+  if (!validPt(a) || !validPt(b)) return Infinity;
+  const R = 6371, toR = (d) => (d * Math.PI) / 180;
+  const dLat = toR(b[0] - a[0]), dLng = toR(b[1] - a[1]);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a[0])) * Math.cos(toR(b[0])) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+// مسافة نقطة P إلى القطعة AB بالكيلومتر + نسبة الإسقاط t (0=البداية,1=النهاية)
+function pointToSegment(P, A, B) {
+  if (!validPt(P) || !validPt(A) || !validPt(B)) return { dist: Infinity, t: 0 };
+  const latRef = (A[0] * Math.PI) / 180;
+  const proj = (p) => [p[1] * 111.32 * Math.cos(latRef), p[0] * 110.57];
+  const [px, py] = proj(P), [ax, ay] = proj(A), [bx, by] = proj(B);
+  const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + dx * t, cy = ay + dy * t;
+  return { dist: Math.hypot(px - cx, py - cy), t };
+}
+
 // ============ الصحة ============
 r.get('/health', (_req, res) => res.json({ ok: true, service: 'wasalni-api', time: now() }));
 
@@ -218,15 +240,19 @@ r.get('/trips', async (req, res) => {
 r.post('/trips', async (req, res) => {
   const { from, to, fromCoord, toCoord, date, time, price, seats, genderPref } = req.body || {};
   if (!from || !to || !time) return bad(res, 'الانطلاق والوجهة والوقت مطلوبة');
+  const KINDS = ['city', 'intercity', 'public_bus', 'school_bus'];
+  const kind = KINDS.includes(req.body?.kind) ? req.body.kind : 'city';
+  const isBus = kind === 'public_bus' || kind === 'school_bus';
   const p = Number(price), s = Number(seats);
-  if (!Number.isFinite(p) || p < 5 || p > 500) return bad(res, 'سعر المقعد غير صالح (5–500)');
-  const cap = (await db.queryOne('SELECT capacity FROM vehicles WHERE user_id=?', [req.user.id]) || {}).capacity || 4;
+  // الباصات: السعر من 0 (المدرسية مجانية للأهالي عادةً)؛ الكاربول 5–500
+  if (!Number.isFinite(p) || p < (isBus ? 0 : 5) || p > 500) return bad(res, isBus ? 'سعر غير صالح (0–500)' : 'سعر المقعد غير صالح (5–500)');
+  const cap = isBus ? 60 : ((await db.queryOne('SELECT capacity FROM vehicles WHERE user_id=?', [req.user.id]) || {}).capacity || 4);
   if (!Number.isInteger(s) || s < 1 || s > cap) return bad(res, `عدد المقاعد يجب أن يكون 1–${cap}`);
 
   const gp = genderPref === 'female' ? 'female' : 'any';
   const tripId = await insertReturningId('trips',
-    ['driver_id', 'from_label', 'to_label', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'date', 'time', 'price_per_seat', 'total_seats', 'gender_pref', 'status', 'created_at'],
-    [req.user.id, from, to, fromCoord?.[0] ?? null, fromCoord?.[1] ?? null, toCoord?.[0] ?? null, toCoord?.[1] ?? null, date || 'اليوم', time, p, s, gp, 'scheduled', now()]);
+    ['driver_id', 'from_label', 'to_label', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'date', 'time', 'price_per_seat', 'total_seats', 'gender_pref', 'kind', 'status', 'created_at'],
+    [req.user.id, from, to, fromCoord?.[0] ?? null, fromCoord?.[1] ?? null, toCoord?.[0] ?? null, toCoord?.[1] ?? null, date || 'اليوم', time, p, s, gp, kind, 'scheduled', now()]);
 
   const trip = await db.queryOne('SELECT * FROM trips WHERE id=?', [tripId]);
   trip.requests = [];
@@ -406,7 +432,13 @@ r.get('/rides/search', async (req, res) => {
   const city = dec(req.query.city);
   const country = dec(req.query.country).toUpperCase();
   const femaleOnly = String(req.query.femaleOnly || '') === '1';
-  // كل الرحلات المجدولة المتاحة (عدا رحلات الباحث نفسه) — بلا حجب حسب الدولة
+  const kindParam = dec(req.query.kind); // city|intercity|public_bus|school_bus
+  // إحداثيات الراكب لمطابقة المسار (board near O, drop near D)
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const O = (num(req.query.fromLat) != null && num(req.query.fromLng) != null) ? [num(req.query.fromLat), num(req.query.fromLng)] : null;
+  const D = (num(req.query.toLat) != null && num(req.query.toLng) != null) ? [num(req.query.toLat), num(req.query.toLng)] : null;
+  const corridorKm = Math.min(10, Math.max(1, num(req.query.radiusKm) || 3));
+
   const sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.gender AS driver_gender, d.country_code AS driver_country,
             v.make, v.model, v.color, v.plate
      FROM trips t
@@ -415,31 +447,88 @@ r.get('/rides/search', async (req, res) => {
      WHERE t.status = 'scheduled' AND t.total_seats > 0 AND t.driver_id != ?
      ORDER BY t.created_at DESC`;
   let trips = await db.query(sql, [req.user.id]);
+
+  // النوع: عند التحديد فلتر مطابق؛ افتراضيًّا الكاربول فقط (city+intercity) — الباصات تُجلب صراحةً
+  if (kindParam) trips = trips.filter(t => (t.kind || 'city') === kindParam);
+  else trips = trips.filter(t => (t.kind || 'city') === 'city' || (t.kind || 'city') === 'intercity');
+
   const norm = (x) => (x || '').toString().trim().replace(/\s+/g, '');
   const matchLabel = (term) => { const q = norm(term); return (t) => { const a = norm(t.to_label), b = norm(t.from_label); return (!!a && (a.includes(q) || q.includes(a))) || (!!b && (b.includes(q) || q.includes(b))); }; };
-  // فلاتر اختيارية: الدولة، المدينة (الانطلاق أو الوجهة)، أو وجهة محددة
   if (country) trips = trips.filter(t => (t.driver_country || '').toUpperCase() === country);
-  if (to) trips = trips.filter(matchLabel(to));
-  if (city) trips = trips.filter(matchLabel(city));
   if (femaleOnly) trips = trips.filter(t => t.driver_gender === 'female' || t.gender_pref === 'female');
-  const rides = trips.map(t => ({
-    id: t.id,
-    driver: t.driver_name || 'سائق',
-    rating: t.driver_rating || 5,
-    car: [t.make, t.model, t.color].filter(Boolean).join(' ') || 'مركبة',
-    plate: t.plate || '',
-    time: t.time || '',
-    date: t.date || '',
-    price: t.price_per_seat,
-    seats: t.total_seats,
-    from: t.from_label,
-    to: t.to_label,
-    fromCoord: [t.from_lat, t.from_lng],
-    toCoord: [t.to_lat, t.to_lng],
-    driverGender: t.driver_gender || 'male',
-    femaleOnly: t.gender_pref === 'female',
-  }));
+
+  // مطابقة المسار: إن وُفّرت إحداثيات الراكب — اعرض الرحلات التي يمرّ مسارها قرب نقطتي الراكب بنفس الاتجاه
+  let matchInfo = new Map();
+  if (O && D) {
+    trips = trips.filter(t => {
+      const A = [t.from_lat, t.from_lng], B = [t.to_lat, t.to_lng];
+      if (!validPt(A) || !validPt(B)) return matchLabel(city || to || '')(t); // بلا إحداثيات للرحلة: عُد للنص
+      const iO = pointToSegment(O, A, B), iD = pointToSegment(D, A, B);
+      const onRoute = iO.dist <= corridorKm && iD.dist <= corridorKm && iO.t < iD.t - 0.01;
+      if (onRoute) matchInfo.set(t.id, { iO, iD, detourKm: Math.round((iO.dist + iD.dist) * 10) / 10 });
+      return onRoute;
+    });
+    // الأقرب للمسار أولًا
+    trips.sort((a, b) => (matchInfo.get(a.id)?.detourKm ?? 99) - (matchInfo.get(b.id)?.detourKm ?? 99));
+  } else {
+    if (to) trips = trips.filter(matchLabel(to));
+    if (city) trips = trips.filter(matchLabel(city));
+  }
+
+  const rides = trips.map(t => {
+    const mi = matchInfo.get(t.id);
+    return {
+      id: t.id,
+      driver: t.driver_name || 'سائق',
+      rating: t.driver_rating || 5,
+      car: [t.make, t.model, t.color].filter(Boolean).join(' ') || 'مركبة',
+      plate: t.plate || '',
+      time: t.time || '', date: t.date || '',
+      price: t.price_per_seat, seats: t.total_seats,
+      from: t.from_label, to: t.to_label,
+      fromCoord: [t.from_lat, t.from_lng], toCoord: [t.to_lat, t.to_lng],
+      kind: t.kind || 'city',
+      driverGender: t.driver_gender || 'male',
+      femaleOnly: t.gender_pref === 'female',
+      // معلومات المطابقة على المسار (نزول مبكر)
+      ...(mi ? {
+        alongRoute: true,
+        boardNear: mi.iO.t < 0.08 ? t.from_label : 'على المسار قرب موقعك',
+        dropNear: mi.iD.t > 0.92 ? t.to_label : 'قبل وجهة السائق — على مسارك',
+        detourKm: mi.detourKm,
+      } : {}),
+    };
+  });
   res.json({ rides });
+});
+
+// ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية) =====
+r.get('/buses', async (req, res) => {
+  const kindParam = (req.query.kind || '').toString();
+  const kinds = ['public_bus', 'school_bus'].includes(kindParam) ? [kindParam] : ['public_bus', 'school_bus'];
+  const ph = kinds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT t.id, t.from_label, t.to_label, t.from_lat, t.from_lng, t.to_lat, t.to_lng, t.time, t.kind, t.driver_lat, t.driver_lng, t.driver_loc_at, t.status,
+            d.name driver_name, v.plate
+     FROM trips t JOIN users d ON d.id=t.driver_id LEFT JOIN vehicles v ON v.user_id=t.driver_id
+     WHERE t.kind IN (${ph}) AND t.status IN ('scheduled','live') ORDER BY t.created_at DESC LIMIT 100`, kinds);
+  res.json({ buses: rows.map(t => ({
+    id: t.id, name: t.driver_name || 'حافلة', plate: t.plate || '', kind: t.kind,
+    from: t.from_label, to: t.to_label, time: t.time, status: t.status,
+    fromCoord: [t.from_lat, t.from_lng], toCoord: [t.to_lat, t.to_lng],
+    driver: (t.driver_lat != null && t.driver_lng != null) ? [t.driver_lat, t.driver_lng] : null,
+    locAt: t.driver_loc_at,
+  })) });
+});
+// موقع باص محدّد (للتتبّع المباشر)
+r.get('/buses/:id/live', async (req, res) => {
+  const t = await db.queryOne('SELECT id,from_lat,from_lng,to_lat,to_lng,driver_lat,driver_lng,driver_loc_at,status,kind FROM trips WHERE id=?', [Number(req.params.id)]);
+  if (!t) return bad(res, 'الحافلة غير موجودة', 404);
+  res.json({
+    status: t.status,
+    driver: (t.driver_lat != null && t.driver_lng != null) ? [t.driver_lat, t.driver_lng] : null,
+    locAt: t.driver_loc_at, fromCoord: [t.from_lat, t.from_lng], toCoord: [t.to_lat, t.to_lng],
+  });
 });
 
 r.post('/bookings', async (req, res) => {

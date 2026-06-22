@@ -37,10 +37,8 @@ async function addNotif(userId, icon, tone, title, sub, toRoute = null) {
   try { require('./push').pushToUser(userId, title, sub, toRoute ? { to: toRoute } : undefined); } catch (e) {}
 }
 
-async function ensureSeedForUser(userId, name) {
-  // المستخدم الجديد يبدأ نظيفًا — لا محادثات/أماكن/مركبة/معاملات وهمية.
-  const nc = await db.queryOne('SELECT COUNT(*) c FROM notifications WHERE user_id=?', [userId]);
-  if (Number(nc.c) === 0) await addNotif(userId, 'star', 'amber', 'أهلاً بك في وصلني 👋', 'أكمل ملفك الشخصي وابدأ أولى رحلاتك');
+async function ensureSeedForUser(_userId, _name) {
+  // المستخدم الجديد يبدأ نظيفًا تمامًا — لا إشعارات/محادثات/بيانات مسبقة.
 }
 
 async function getConfig(key, def) {
