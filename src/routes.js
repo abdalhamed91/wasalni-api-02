@@ -465,7 +465,8 @@ r.get('/rides/search', async (req, res) => {
   if (kindParam) trips = trips.filter(t => (t.kind || 'city') === kindParam);
   else trips = trips.filter(t => (t.kind || 'city') === 'city' || (t.kind || 'city') === 'intercity');
 
-  const norm = (x) => (x || '').toString().trim().replace(/\s+/g, '');
+  // تطبيع: إزالة التشكيل العربي (عمّان=عمان) والمسافات والتطويل
+  const norm = (x) => (x || '').toString().trim().replace(/[ً-ْٰـ]/g, '').replace(/\s+/g, '');
   const matchLabel = (term) => { const q = norm(term); return (t) => { const a = norm(t.to_label), b = norm(t.from_label); return (!!a && (a.includes(q) || q.includes(a))) || (!!b && (b.includes(q) || q.includes(b))); }; };
   if (country) trips = trips.filter(t => (t.driver_country || '').toUpperCase() === country);
   if (femaleOnly) trips = trips.filter(t => t.driver_gender === 'female' || t.gender_pref === 'female');
