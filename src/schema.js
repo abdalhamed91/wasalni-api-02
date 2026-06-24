@@ -280,6 +280,8 @@ async function runMigrations() {
   await ensureColumn('requests', 'rated', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
   // نوع خدمة السائق: carpool | public_bus | school_bus
   await ensureColumn('users', 'service_type', "TEXT DEFAULT 'carpool'");
+  // صورة الملف الشخصي (رابط من /uploads)
+  await ensureColumn('users', 'avatar', "TEXT DEFAULT ''");
   // ضريبة القيمة المضافة وسعر الصرف لكل دولة (يديرهما المشرف)
   await ensureColumn('country_settings', 'tax_rate', 'REAL NOT NULL DEFAULT 0');
   await ensureColumn('country_settings', 'exchange_rate', 'REAL NOT NULL DEFAULT 1');

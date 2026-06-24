@@ -293,14 +293,15 @@ async function renderUsers(c,role){
   const {users}=await apiGet('/users'+(role?'?role='+role:''));
   if(!users.length){ c.innerHTML='<div class="empty">لا يوجد مستخدمون بعد. سجّل دخولًا من التطبيق لتظهر البيانات.</div>'; return; }
   c.innerHTML = searchBar('tblUsers','بحث بالاسم أو الجوال…','users') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblUsers">
-    <thead><tr><th>المستخدم</th><th>الجوال</th><th>الدور</th><th>التقييم</th>${role==='driver'?'<th>المركبة</th>':''}<th>المحفظة</th><th>الحالة</th><th></th></tr></thead>
+    <thead><tr><th>المستخدم</th><th>الجوال</th><th>الدولة</th><th>الدور</th><th>التقييم</th>${role==='driver'?'<th>المركبة</th>':''}<th>المحفظة</th><th>الحالة</th><th></th></tr></thead>
     <tbody>${users.map(u=>`<tr>
       <td><span class="avatar">${esc(initials(u.name))}</span> ${esc(u.name)}</td>
       <td class="num" dir="ltr" style="text-align:right">${esc(u.dial)} ${esc(u.phone)}</td>
+      <td>${esc(CC_NAMES[u.country_code]||u.country_code||'—')} <span class="muted" style="font-size:11px">${esc(CUR[u.country_code]||'')}</span></td>
       <td><span class="tag ${u.role==='driver'?'t-blue':'t-gray'}">${u.role==='driver'?'سائق':'راكب'}</span></td>
       <td class="num">★ ${fmt(u.rating)}</td>
       ${role==='driver'?`<td>${u.vehicle?esc(u.vehicle.make+' '+u.vehicle.model+' · '+u.vehicle.plate):'<span class="muted">—</span>'}</td>`:''}
-      <td class="num">﷼ ${fmt(u.role==='driver'?u.earnings:u.wallet)}</td>
+      <td class="num">${esc(CUR[u.country_code]||'')} ${fmt(u.role==='driver'?u.earnings:u.wallet)}</td>
       <td><span class="tag ${u.status==='suspended'?'t-red':'t-green'}">${u.status==='suspended'?'موقوف':'نشط'}</span></td>
       <td><div style="display:flex;gap:6px">
         <button class="btn btn-pri" onclick="userDetail(${u.id})">تفاصيل</button>
@@ -885,6 +886,27 @@ async function saveCountryFull(code){
   }catch(e){ if(msg){ msg.textContent=e.message; msg.style.color='var(--red)'; } else toast(e.message); }
 }
 // ============ الخريطة والعمليات ============
+function ensureLeaflet(){
+  return new Promise((resolve)=>{
+    if(window.L) return resolve();
+    const css=document.createElement('link'); css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(css);
+    const js=document.createElement('script'); js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; js.onload=()=>resolve(); js.onerror=()=>resolve(); document.head.appendChild(js);
+  });
+}
+let _opsMap=null;
+function initOpsMap(trips){
+  const el=document.getElementById('opsMap'); if(!el||!window.L) return;
+  if(_opsMap){ try{_opsMap.remove();}catch(e){} _opsMap=null; }
+  _opsMap=L.map('opsMap').setView([31.95,35.92],7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(_opsMap);
+  const pts=[];
+  (trips||[]).forEach(t=>{
+    const dlat=t.driver_lat!=null?t.driver_lat:t.from_lat, dlng=t.driver_lng!=null?t.driver_lng:t.from_lng;
+    if(dlat!=null&&dlng!=null){ L.marker([dlat,dlng]).addTo(_opsMap).bindPopup('🚗 '+(t.driver_name||'سائق')+'<br>'+(t.from_label||'')+' ← '+(t.to_label||'')); pts.push([dlat,dlng]); }
+    (t.requests||[]).forEach(r=>{ if(r.pickup_lat!=null&&r.pickup_lng!=null){ L.circleMarker([r.pickup_lat,r.pickup_lng],{radius:6,color:'#FF6320',fillColor:'#FF6320',fillOpacity:.7}).addTo(_opsMap).bindPopup('🧍 '+(r.passenger_name||'راكب')); pts.push([r.pickup_lat,r.pickup_lng]); } });
+  });
+  if(pts.length) _opsMap.fitBounds(pts,{padding:[40,40],maxZoom:13});
+}
 async function renderOperations(c){
   const o=await apiGet('/operations');
   const s=o.summary;
@@ -893,6 +915,10 @@ async function renderOperations(c){
       ${stat('رحلات نشطة',s.activeTrips,'🛣','b-bl','قيد التشغيل الآن')}
       ${stat('حجوزات حيّة',s.liveBookings,'🎫','b-or','ركّاب في رحلات')}
       ${stat('سائقون',s.onlineDrivers,'🚗','b-gr','إجمالي السائقين')}
+    </div>
+    <div class="card" style="margin-bottom:18px">
+      <h3 style="font-size:15px;margin-bottom:12px">🗺 الخريطة الحيّة — مواقع السائقين ونقاط الالتقاط</h3>
+      <div id="opsMap" style="height:380px;border-radius:14px;overflow:hidden;border:1px solid var(--line)"></div>
     </div>
     <div class="card">
       <h3 style="font-size:15px;margin-bottom:14px">🗺 الرحلات النشطة وطلباتها</h3>
@@ -906,6 +932,7 @@ async function renderOperations(c){
           ${(t.requests||[]).length? `<div style="display:flex;flex-wrap:wrap;gap:6px">${t.requests.map(r=>`<span class="tag ${r.status==='accepted'?'t-gr':'t-am'}">${esc(r.passenger_name)} · ${esc(r.status)}</span>`).join('')}</div>`:'<div class="muted" style="font-size:12px">لا طلبات بعد</div>'}
         </div>`).join('') : '<div class="empty">لا توجد رحلات نشطة حاليًا</div>'}
     </div>`;
+  await ensureLeaflet(); initOpsMap(o.activeTrips);
 }
 
 // ============ الدعم ============

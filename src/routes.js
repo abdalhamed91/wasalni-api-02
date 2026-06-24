@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const UPLOAD_DIR = path.join(path.dirname(process.env.DB_PATH || path.join(__dirname, '..', 'wasalni.db')), 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const { db, now, round2, insertReturningId, addTxn, addNotif, COMMISSION_RATE, SERVICE_COUNTRIES, commissionRate, serviceCountries, platformProfit, seatPriceForDistance, countrySetting } = require('./db');
-const { sendOtp, verifyOtp, publicUser, authRequired } = require('./auth');
+const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired } = require('./auth');
 const { paymentsEnabled, verifyPayment } = require('./payments');
 
 const r = express.Router();
@@ -90,14 +90,39 @@ r.get('/me', async (req, res) => {
 });
 
 r.patch('/me', async (req, res) => {
-  const { name, email, role, countryCode, dial, gender } = req.body || {};
+  const { name, email, role, countryCode, dial, gender, avatar } = req.body || {};
   if (role && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
   if (gender && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
   await db.execute(`UPDATE users SET
       name = COALESCE(?, name), email = COALESCE(?, email),
       role = COALESCE(?, role), country_code = COALESCE(?, country_code), dial = COALESCE(?, dial),
-      gender = COALESCE(?, gender)
-    WHERE id=?`, [name ?? null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, req.user.id]);
+      gender = COALESCE(?, gender), avatar = COALESCE(?, avatar)
+    WHERE id=?`, [name ?? null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, req.user.id]);
+  const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
+  res.json({ user: await publicUser(u) });
+});
+
+// تغيير رقم الجوال — يتطلّب تحقّقًا برمز على الرقم الجديد
+r.post('/me/phone/otp', async (req, res) => {
+  const phone = String(req.body?.phone || '').replace(/\D/g, '');
+  const dial = String(req.body?.dial || req.user.dial || '+962');
+  if (phone.length < 7) return bad(res, 'رقم جوال غير صالح');
+  const taken = await db.queryOne('SELECT id FROM users WHERE phone=? OR phone LIKE ?', [phone, '%' + phone.slice(-9)]);
+  if (taken && taken.id !== req.user.id) return bad(res, 'هذا الرقم مستخدم بحساب آخر');
+  const r2 = await sendOtp(phone, dial);
+  if (r2.error) return bad(res, r2.error);
+  res.json({ sent: true, devCode: r2.devCode || undefined });
+});
+r.post('/me/phone/verify', async (req, res) => {
+  const phone = String(req.body?.phone || '').replace(/\D/g, '');
+  const dial = String(req.body?.dial || req.user.dial || '+962');
+  const code = String(req.body?.code || '');
+  if (phone.length < 7) return bad(res, 'رقم جوال غير صالح');
+  const taken = await db.queryOne('SELECT id FROM users WHERE phone=? OR phone LIKE ?', [phone, '%' + phone.slice(-9)]);
+  if (taken && taken.id !== req.user.id) return bad(res, 'هذا الرقم مستخدم بحساب آخر');
+  const v = await checkOtp(phone, code);
+  if (v.error) return bad(res, v.error);
+  await db.execute('UPDATE users SET phone=?, dial=? WHERE id=?', [phone, dial, req.user.id]);
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u) });
 });
@@ -610,7 +635,7 @@ r.get('/buses/:id/live', async (req, res) => {
 });
 
 r.post('/bookings', async (req, res) => {
-  const { rideId, seats, to, preferences, note } = req.body || {};
+  const { rideId, seats, to, preferences, note, promoCode } = req.body || {};
   const trip = await db.queryOne(
     `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating,
             v.make, v.model, v.color, v.plate
@@ -622,10 +647,27 @@ r.post('/bookings', async (req, res) => {
   if (trip.driver_id === req.user.id) return bad(res, 'لا يمكنك حجز رحلتك');
   const s = Number(seats);
   if (!Number.isInteger(s) || s < 1 || s > trip.total_seats) return bad(res, `المقاعد المتاحة: ${trip.total_seats}`);
-  const fare = round2(trip.price_per_seat * s);
-  const u = await db.queryOne('SELECT wallet, name, rating, gender FROM users WHERE id=?', [req.user.id]);
+  const baseFare = round2(trip.price_per_seat * s);
+  const u = await db.queryOne('SELECT wallet, name, rating, gender, country_code FROM users WHERE id=?', [req.user.id]);
   // تطبيق تفضيل الجنس: رحلة «نساء فقط» تُحجز فقط من راكبة
   if (trip.gender_pref === 'female' && u.gender !== 'female') return bad(res, 'هذه الرحلة مخصّصة للنساء فقط');
+
+  // كود خصم بنسبة مئوية يُطبَّق تلقائيًا على الأجرة (إن كان صالحًا)
+  let appliedPromo = null, discount = 0;
+  if (promoCode) {
+    const code = String(promoCode).trim().toUpperCase();
+    const p = await db.queryOne('SELECT * FROM promos WHERE UPPER(code)=?', [code]);
+    if (!p || !Number(p.active)) return bad(res, 'كود الخصم غير صالح');
+    if (p.discount_type !== 'percent') return bad(res, 'هذا الكود يُضاف رصيدًا من المحفظة، لا يُطبَّق على الحجز');
+    if (p.expires_at && Number(p.expires_at) < Date.now()) return bad(res, 'انتهت صلاحية كود الخصم');
+    if (p.country && p.country !== u.country_code) return bad(res, 'كود الخصم غير متاح في بلدك');
+    if (Number(p.max_uses) > 0 && Number(p.used_count) >= Number(p.max_uses)) return bad(res, 'انتهت مرّات استخدام الكود');
+    const used = await db.queryOne('SELECT id FROM promo_redemptions WHERE promo_id=? AND user_id=?', [p.id, req.user.id]);
+    if (used) return bad(res, 'سبق أن استخدمت هذا الكود');
+    discount = round2(baseFare * Number(p.discount_value));
+    appliedPromo = p;
+  }
+  const fare = round2(baseFare - discount);
   if (u.wallet < fare) return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك');
 
   // 1) حجز المقاعد ذرّيًا (يمنع البيع الزائد عند الحجز المتزامن)
@@ -650,6 +692,12 @@ r.post('/bookings', async (req, res) => {
   const bookingId = await insertReturningId('bookings',
     ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','preferences','pax_note','status','created_at'],
     [req.user.id, requestId, trip.driver_name, trip.driver_rating, car, trip.plate || '', trip.from_label, trip.to_label, trip.time, s, fare, prefsJson, paxNote, 'pending_driver', now()]);
+  // سجّل استخدام كود الخصم (مرّة واحدة لكل مستخدم)
+  if (appliedPromo && discount > 0) {
+    await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [appliedPromo.id]);
+    await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [appliedPromo.id, req.user.id, discount, now()]);
+    await addNotif(req.user.id, 'wallet', 'green', 'طُبّق كود الخصم 🎁', `وفّرت ${discount} ${await userCur(req.user.id)} على رحلتك`);
+  }
   // المبلغ محجوز (مخصوم) بانتظار موافقة السائق — يُسترجع تلقائيًا عند الرفض
   await addNotif(req.user.id, 'time', 'amber', 'تم إرسال طلبك', `بانتظار موافقة السائق · ${trip.from_label} ← ${trip.to_label}`, '/(passenger)/tracking');
   await addNotif(trip.driver_id, 'user', 'blue', 'طلب حجز جديد', `${u.name || 'راكب'} · ${s} مقعد`, '/(driver)/requests');

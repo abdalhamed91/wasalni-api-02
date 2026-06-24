@@ -42,6 +42,20 @@ async function sendOtp(phone, dial) {
   return { devCode: DEV_MODE ? code : null, sent: true };
 }
 
+// تحقّق خفيف من الرمز (لتغيير الهاتف/التحقّق دون تسجيل دخول) — يستهلك الرمز عند النجاح
+async function checkOtp(phone, code) {
+  const row = await db.queryOne('SELECT code, expires_at, attempts FROM otps WHERE phone=?', [phone]);
+  const master = DEV_MODE && code === '0000';
+  if (!master) {
+    if (!row) return { error: 'لم يُرسل رمز لهذا الرقم' };
+    if (Number(row.attempts) >= OTP_MAX_ATTEMPTS) { await db.execute('DELETE FROM otps WHERE phone=?', [phone]); return { error: 'تجاوزت عدد المحاولات، أعد الإرسال' }; }
+    if (Number(row.expires_at) < now()) return { error: 'انتهت صلاحية الرمز، أعد الإرسال' };
+    if (row.code !== code) { await db.execute('UPDATE otps SET attempts=attempts+1 WHERE phone=?', [phone]); return { error: 'الرمز غير صحيح' }; }
+  }
+  await db.execute('DELETE FROM otps WHERE phone=?', [phone]);
+  return { ok: true };
+}
+
 async function verifyOtp(phone, dial, countryCode, code) {
   const row = await db.queryOne('SELECT code, expires_at, attempts FROM otps WHERE phone=?', [phone]);
   const master = DEV_MODE && code === '0000';
@@ -76,6 +90,7 @@ async function publicUser(u) {
     id: u.id, phone: u.phone, dial: u.dial, countryCode: u.country_code,
     role: u.role, gender: u.gender, name: u.name, email: u.email, rating: u.rating,
     ratingCount: Number(u.rating_count) || 0, serviceType: u.service_type || 'carpool',
+    avatar: u.avatar || '',
     wallet: u.wallet, earnings: u.earnings, vehicle: v,
     verified: db.kind === 'postgres' ? !!u.verified : !!Number(u.verified),
     verifyStatus: u.verify_status || 'none',
@@ -99,4 +114,4 @@ async function authRequired(req, res, next) {
   }
 }
 
-module.exports = { sendOtp, verifyOtp, publicUser, authRequired };
+module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired };
