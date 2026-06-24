@@ -216,6 +216,16 @@ const TABLES = [
     km_cap REAL NOT NULL DEFAULT 2.5,
     enabled ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'}
   )`,
+  `CREATE TABLE IF NOT EXISTS reviews (
+    id ${ID},
+    target_id ${INT} NOT NULL,
+    reviewer_id ${INT},
+    booking_id ${INT},
+    stars ${INT} NOT NULL,
+    tags TEXT,
+    comment TEXT,
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL

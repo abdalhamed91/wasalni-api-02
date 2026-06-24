@@ -671,6 +671,13 @@ r.post('/bookings/:id/rate', async (req, res) => {
   if (!driverId) return bad(res, 'تعذّر تحديد السائق');
   await applyRating(driverId, req.body?.stars);
   await db.execute('UPDATE bookings SET rated=1 WHERE id=?', [b.id]);
+  // خزّن المراجعة (وسوم + تعليق) للأرشفة والإشراف
+  const stars = Math.max(1, Math.min(5, Math.round(Number(req.body?.stars) || 0)));
+  const tags = Array.isArray(req.body?.tags) ? JSON.stringify(req.body.tags.slice(0, 8)) : null;
+  const comment = req.body?.comment ? String(req.body.comment).slice(0, 400) : null;
+  if (stars) await insertReturningId('reviews',
+    ['target_id','reviewer_id','booking_id','stars','tags','comment','created_at'],
+    [driverId, req.user.id, b.id, stars, tags, comment, now()]);
   res.json({ ok: true });
 });
 // السائق يقيّم راكبًا (عبر طلب الحجز)
