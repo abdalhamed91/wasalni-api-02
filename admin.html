@@ -54,8 +54,12 @@ html[data-theme=dark] .b-or{background:#3A2417}html[data-theme=dark] .b-gr{backg
 /* table */
 table{width:100%;border-collapse:collapse}
 th,td{text-align:right;padding:13px 14px;font-size:13px;border-bottom:1px solid var(--line)}
-th{color:var(--muted);font-weight:700;font-size:12px;background:var(--surface2)}
+th{color:var(--muted);font-weight:700;font-size:12px;background:var(--surface2);position:sticky;top:0;z-index:1;white-space:nowrap}
+th[data-enh]:hover{color:var(--blue);background:var(--tint,#eaf1fc)}
+th[data-dir]{color:var(--blue)}
 tr:hover td{background:var(--surface2)}
+.flt{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.flt select.inp{max-width:170px;cursor:pointer}
 .tag{display:inline-block;padding:3px 11px;border-radius:999px;font-size:11.5px;font-weight:700}
 .t-green{background:#E4F8EC;color:#15803D}.t-blue{background:var(--tint);color:var(--blue)}.t-am{background:#FFF3E0;color:#C97B17}.t-red{background:#FEE7E7;color:#DC2626}.t-gray{background:var(--line);color:var(--muted)}
 html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{background:#33260F}html[data-theme=dark] .t-red{background:#3A1A1A}
@@ -212,25 +216,58 @@ async function updateBadge(){ try{ const s=await apiGet('/stats'); const b=$('#v
 
 async function render(){
   const c=$('#content'); c.innerHTML='<div class="empty"><div class="spin"></div></div>';
+  const map={dashboard:renderDashboard,operations:renderOperations,
+    users:x=>renderUsers(x,null),drivers:x=>renderUsers(x,'driver'),
+    verify:renderVerify,trips:renderTrips,bookings:renderBookings,finance:renderFinance,
+    withdrawals:renderWithdrawals,reports:renderReports,support:renderSupport,
+    conversations:renderConversations,promos:renderPromos,notifications:renderAdminNotifs,
+    countries:renderCountries,team:renderTeam,settings:renderSettings};
   try{
-    if(S.page==='dashboard') return renderDashboard(c);
-    if(S.page==='operations') return renderOperations(c);
-    if(S.page==='users') return renderUsers(c,null);
-    if(S.page==='drivers') return renderUsers(c,'driver');
-    if(S.page==='verify') return renderVerify(c);
-    if(S.page==='trips') return renderTrips(c);
-    if(S.page==='bookings') return renderBookings(c);
-    if(S.page==='finance') return renderFinance(c);
-    if(S.page==='withdrawals') return renderWithdrawals(c);
-    if(S.page==='reports') return renderReports(c);
-    if(S.page==='support') return renderSupport(c);
-    if(S.page==='conversations') return renderConversations(c);
-    if(S.page==='promos') return renderPromos(c);
-    if(S.page==='notifications') return renderAdminNotifs(c);
-    if(S.page==='countries') return renderCountries(c);
-    if(S.page==='team') return renderTeam(c);
-    if(S.page==='settings') return renderSettings(c);
+    const fn=map[S.page];
+    if(fn){ await fn(c); enhanceTables(); }       // محرّك الفرز العالمي بعد كل رسم
   }catch(e){ c.innerHTML='<div class="empty">تعذّر تحميل البيانات: '+esc(e.message)+'</div>'; }
+}
+
+// ========= محرّك الجداول العالمي: فرز بالنقر على أي رأس عمود + عدّاد صفوف =========
+function enhanceTables(){
+  document.querySelectorAll('#content table').forEach(tbl=>{
+    const head=tbl.tHead&&tbl.tHead.rows[0]; if(!head) return;
+    Array.from(head.cells).forEach((th,idx)=>{
+      if(th.dataset.enh) return; th.dataset.enh='1';
+      const label=th.textContent.trim();
+      if(!label||th.dataset.nosort!==undefined){ return; }   // أعمدة الإجراءات بلا فرز
+      th.style.cursor='pointer'; th.style.userSelect='none'; th.title='اضغط للفرز';
+      th.addEventListener('click',()=>sortTableBy(tbl,idx,th));
+    });
+    // عدّاد الصفوف أسفل الجدول
+    const tb=tbl.tBodies[0];
+    if(tb && !tbl.dataset.cnt){ tbl.dataset.cnt='1';
+      const wrap=tbl.closest('.card')||tbl.parentElement;
+      const meta=document.createElement('div'); meta.className='tbl-count muted';
+      meta.style.cssText='padding:8px 14px;font-size:12px;border-top:1px solid var(--line)';
+      const upd=()=>{ const vis=Array.from(tb.rows).filter(r=>r.style.display!=='none'&&r.cells.length>1).length; meta.textContent='عدد السجلّات: '+vis; };
+      tbl.parentElement.appendChild(meta); upd();
+      tbl._updCount=upd;
+    }
+  });
+}
+function sortTableBy(tbl,idx,th){
+  const tb=tbl.tBodies[0]; if(!tb) return;
+  const dir=th.dataset.dir==='asc'?'desc':'asc';
+  Array.from(th.parentNode.cells).forEach(h=>{ if(h!==th){ delete h.dataset.dir; const s=h.querySelector('.srt'); if(s)s.remove(); }});
+  th.dataset.dir=dir;
+  let ind=th.querySelector('.srt'); if(!ind){ ind=document.createElement('span'); ind.className='srt'; ind.style.cssText='font-size:9px;margin-inline-start:5px;opacity:.8'; th.appendChild(ind); }
+  ind.textContent=dir==='asc'?'▲':'▼';
+  const rows=Array.from(tb.rows).filter(r=>r.cells.length>1);
+  const txt=tr=>(tr.cells[idx]?(tr.cells[idx].textContent||'').trim():'');
+  const num=s=>{ const n=parseFloat(String(s).replace(/[٬,،]/g,'').replace(/[^\d.\-]/g,'')); return isNaN(n)?null:n; };
+  const allNum=rows.length>0 && rows.every(r=>{ const t=txt(r); return t===''||t==='—'||num(t)!==null; });
+  rows.sort((a,b)=>{
+    const x=txt(a),y=txt(b);
+    if(allNum){ const nx=num(x), ny=num(y); return dir==='asc'?(nx??-1e15)-(ny??-1e15):(ny??-1e15)-(nx??-1e15); }
+    return dir==='asc'?x.localeCompare(y,'ar'):y.localeCompare(x,'ar');
+  });
+  rows.forEach(r=>tb.appendChild(r));
 }
 
 function stat(lbl,val,ic,cls,delta){ return `<div class="card stat"><div class="ic ${cls}">${ic}</div><div class="lbl">${lbl}</div><div class="val num">${val}</div>${delta?`<div class="delta">${delta}</div>`:''}</div>`; }
@@ -241,7 +278,7 @@ async function renderDashboard(c){ refreshRepBadge();
    <div class="grid g4">
      ${stat('إجمالي المستخدمين',fmt(s.users),'◉','b-blue',`${fmt(s.drivers)} سائق · ${fmt(s.passengers)} راكب`)}
      ${stat('الرحلات المكتملة',fmt(s.tripsCompleted),'🛣','b-or',`${fmt(s.tripsTotal)} رحلة إجمالاً · ${fmt(s.tripsLive)} جارية`)}
-     ${stat('عمولة المنصة','﷼ '+fmt(s.commission),'💰','b-gr',`من إيراد ${fmt(s.gross)} ﷼ (${Math.round(s.commissionRate*100)}%)`)}
+     ${stat('عمولة المنصة','د.أ '+fmt(s.commission),'💰','b-gr',`من إيراد ${fmt(s.gross)} د.أ (${Math.round(s.commissionRate*100)}%)`)}
      ${stat('بانتظار التوثيق',fmt(s.pendingVerify),'✓','b-am',`${fmt(s.verified)} سائق موثّق`)}
    </div>
    <div class="grid g2" style="margin-top:16px">
@@ -251,8 +288,8 @@ async function renderDashboard(c){ refreshRepBadge();
        <div class="bar"><span style="width:${s.bookings?Math.round(s.bookingsCompleted/s.bookings*100):0}%"></span></div>
        <div class="row" style="margin-top:6px"><span class="muted" style="font-size:12px">مكتملة: ${fmt(s.bookingsCompleted)}</span></div>
        <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-       <div class="row"><span class="muted">أرصدة محافظ الركّاب</span><span class="spacer"></span><b class="num">﷼ ${fmt(s.walletsTotal)}</b></div>
-       <div class="row" style="margin-top:10px"><span class="muted">مستحقات على المنصة للسائقين</span><span class="spacer"></span><b class="num" style="color:var(--orange)">﷼ ${fmt(s.earningsOwed)}</b></div>
+       <div class="row"><span class="muted">أرصدة محافظ الركّاب</span><span class="spacer"></span><b class="num">د.أ ${fmt(s.walletsTotal)}</b></div>
+       <div class="row" style="margin-top:10px"><span class="muted">مستحقات على المنصة للسائقين</span><span class="spacer"></span><b class="num" style="color:var(--orange)">د.أ ${fmt(s.earningsOwed)}</b></div>
      </div>
      <div class="card">
        <h3 style="font-size:15px;margin-bottom:14px">الدول المُفعّلة للخدمة</h3>
@@ -292,14 +329,21 @@ async function loadCharts(){
 async function renderUsers(c,role){
   const {users}=await apiGet('/users'+(role?'?role='+role:''));
   if(!users.length){ c.innerHTML='<div class="empty">لا يوجد مستخدمون بعد. سجّل دخولًا من التطبيق لتظهر البيانات.</div>'; return; }
-  c.innerHTML = searchBar('tblUsers','بحث بالاسم أو الجوال…','users') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblUsers">
-    <thead><tr><th>المستخدم</th><th>الجوال</th><th>الدولة</th><th>الدور</th><th>التقييم</th>${role==='driver'?'<th>المركبة</th>':''}<th>المحفظة</th><th>الحالة</th><th></th></tr></thead>
+  const statusCol=role==='driver'?8:7;
+  const filters=[
+    {col:2,label:'الدولة',options:countryFilterOptions()},
+    ...(role!=='driver'?[{col:3,label:'الدور',options:[{v:'سائق',t:'سائق'},{v:'راكب',t:'راكب'}]}]:[]),
+    {col:statusCol,label:'الحالة',options:[{v:'نشط',t:'نشط'},{v:'موقوف',t:'موقوف'}]},
+  ];
+  c.innerHTML = filterControls('tblUsers',{placeholder:'بحث بالاسم أو الجوال…',exportKind:'users',filters}) + `<div class="card" style="padding:0;overflow:hidden"><table id="tblUsers">
+    <thead><tr><th>المستخدم</th><th>الجوال</th><th>الدولة</th><th>الدور</th><th>التقييم</th><th>${role==='driver'?'رحلات':'حجوزات'}</th>${role==='driver'?'<th>المركبة</th>':''}<th>المحفظة</th><th>الحالة</th><th data-nosort></th></tr></thead>
     <tbody>${users.map(u=>`<tr>
       <td><span class="avatar">${esc(initials(u.name))}</span> ${esc(u.name)}</td>
       <td class="num" dir="ltr" style="text-align:right">${esc(u.dial)} ${esc(u.phone)}</td>
       <td>${esc(CC_NAMES[u.country_code]||u.country_code||'—')} <span class="muted" style="font-size:11px">${esc(CUR[u.country_code]||'')}</span></td>
       <td><span class="tag ${u.role==='driver'?'t-blue':'t-gray'}">${u.role==='driver'?'سائق':'راكب'}</span></td>
-      <td class="num">★ ${fmt(u.rating)}</td>
+      <td class="num">${Number(u.rating_count)>0?'★ '+fmt(u.rating):'<span class="muted">جديد</span>'}</td>
+      <td class="num">${fmt(u.role==='driver'?u.trips:u.bookings)}</td>
       ${role==='driver'?`<td>${u.vehicle?esc(u.vehicle.make+' '+u.vehicle.model+' · '+u.vehicle.plate):'<span class="muted">—</span>'}</td>`:''}
       <td class="num">${esc(CUR[u.country_code]||'')} ${fmt(u.role==='driver'?u.earnings:u.wallet)}</td>
       <td><span class="tag ${u.status==='suspended'?'t-red':'t-green'}">${u.status==='suspended'?'موقوف':'نشط'}</span></td>
@@ -311,7 +355,13 @@ async function renderUsers(c,role){
       </div></td>
     </tr>`).join('')}</tbody></table></div>`;
 }
-async function setStatus(id,status){ try{ await apiSend('/users/'+id+'/status','PATCH',{status}); render(); }catch(e){ alert(e.message); } }
+async function setStatus(id,status){
+  try{
+    await apiSend('/users/'+id+'/status','PATCH',{status});
+    toast(status==='suspended'?'✅ تم إيقاف الحساب — يُمنع فورًا من استخدام التطبيق':'✅ تم تفعيل الحساب');
+    closeModal(); render();
+  }catch(e){ toast('تعذّر: '+e.message); }
+}
 
 // ===== نظام النوافذ =====
 function openModal(title,html){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=html; $('#modalBg').classList.add('open'); }
@@ -322,7 +372,7 @@ async function userDetail(id){
   try{
     const d=await apiGet('/users/'+id);
     const u=d.user, v=d.vehicle, s=d.stats;
-    const cur='﷼';
+    const cur=CUR[u.country_code]||'د.أ';
     const row=(l,val)=>`<div class="detail-row"><span class="lbl">${l}</span><span class="val">${val}</span></div>`;
     let html=`
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
@@ -368,7 +418,7 @@ function editUserForm(id){
       <div class="field"><label>البريد</label><input id="eu_email" value="${esc(u.email||'')}"></div>
       <div class="field"><label>المدينة</label><input id="eu_city" value="${esc(u.city||'')}"></div>
       <div class="row" style="gap:10px">
-        <div class="field" style="flex:1"><label>المحفظة (﷼)</label><input id="eu_wallet" type="number" step="0.5" value="${u.wallet}"></div>
+        <div class="field" style="flex:1"><label>المحفظة (د.أ)</label><input id="eu_wallet" type="number" step="0.5" value="${u.wallet}"></div>
         <div class="field" style="flex:1"><label>التقييم</label><input id="eu_rating" type="number" step="0.1" min="0" max="5" value="${u.rating}"></div>
       </div>
       <div class="field"><label>الدور</label>
@@ -474,30 +524,38 @@ const tripTag={scheduled:['t-blue','مجدولة'],live:['t-am','جارية'],co
 async function renderTrips(c){
   const {trips}=await apiGet('/trips');
   if(!trips.length){ c.innerHTML='<div class="empty">لا توجد رحلات منشورة بعد.</div>'; return; }
-  c.innerHTML = searchBar('tblTrips','بحث بالسائق أو المسار…','trips') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblTrips">
-    <thead><tr><th>السائق</th><th>المسار</th><th>الوقت</th><th>السعر/مقعد</th><th>المقاعد</th><th>الطلبات</th><th>الحالة</th></tr></thead>
+  c.innerHTML = filterControls('tblTrips',{placeholder:'بحث بالسائق أو المسار…',exportKind:'trips',
+    filters:[{col:1,label:'الدولة',options:countryFilterOptions()},
+             {col:7,label:'الحالة',options:[{v:'مجدولة',t:'مجدولة'},{v:'جارية',t:'جارية'},{v:'مكتملة',t:'مكتملة'},{v:'ملغاة',t:'ملغاة'}]}]})
+    + `<div class="card" style="padding:0;overflow:hidden"><table id="tblTrips">
+    <thead><tr><th>السائق</th><th>الدولة/المدينة</th><th>المسار</th><th>الوقت</th><th>السعر/مقعد</th><th>المقاعد</th><th>الطلبات</th><th>الحالة</th></tr></thead>
     <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr>
       <td>${esc(t.driver_name)}</td>
+      <td>${esc(CC_NAMES[t.country_code]||t.country_code||'—')}${t.city?' <span class="muted" style="font-size:11px">'+esc(t.city)+'</span>':''}</td>
       <td>${esc(t.from_label)} ← ${esc(t.to_label)}</td>
       <td class="num">${esc(t.date&&t.date!=='اليوم'?t.date+' · ':'')}${esc(t.time)}</td>
-      <td class="num">﷼ ${fmt(t.price_per_seat)}</td>
+      <td class="num">${CUR[t.country_code]||''} ${fmt(t.price_per_seat)}</td>
       <td class="num">${fmt(t.accepted_count)}/${fmt(t.total_seats)}</td>
       <td class="num">${fmt(t.req_count)}</td>
       <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 
-const bkTag={confirmed:['t-blue','مؤكّد'],enroute:['t-am','في الطريق'],intrip:['t-am','جارية'],completed:['t-green','مكتملة'],cancelled:['t-red','ملغاة']};
+const bkTag={pending_driver:['t-am','بانتظار موافقة'],confirmed:['t-blue','مؤكّد'],enroute:['t-am','في الطريق'],intrip:['t-am','جارية'],completed:['t-green','مكتملة'],cancelled:['t-red','ملغاة']};
 async function renderBookings(c){
   const {bookings}=await apiGet('/bookings');
   if(!bookings.length){ c.innerHTML='<div class="empty">لا توجد حجوزات بعد.</div>'; return; }
-  c.innerHTML = searchBar('tblBookings','بحث بالراكب أو السائق…','bookings') + `<div class="card" style="padding:0;overflow:hidden"><table id="tblBookings">
-    <thead><tr><th>الراكب</th><th>السائق</th><th>المسار</th><th>المقاعد</th><th>الأجرة</th><th>الحالة</th></tr></thead>
+  c.innerHTML = filterControls('tblBookings',{placeholder:'بحث بالراكب أو السائق…',exportKind:'bookings',
+    filters:[{col:1,label:'الدولة',options:countryFilterOptions()},
+             {col:6,label:'الحالة',options:[{v:'بانتظار',t:'بانتظار موافقة'},{v:'مؤكّد',t:'مؤكّد'},{v:'جارية',t:'جارية'},{v:'مكتملة',t:'مكتملة'},{v:'ملغاة',t:'ملغاة'}]}]})
+    + `<div class="card" style="padding:0;overflow:hidden"><table id="tblBookings">
+    <thead><tr><th>الراكب</th><th>الدولة/المدينة</th><th>السائق</th><th>المسار</th><th>المقاعد</th><th>الأجرة</th><th>الحالة</th></tr></thead>
     <tbody>${bookings.map(b=>{const tg=bkTag[b.status]||['t-gray',b.status];return `<tr>
       <td><span class="avatar">${esc(initials(b.passenger_name))}</span> ${esc(b.passenger_name)}</td>
+      <td>${esc(CC_NAMES[b.country_code]||b.country_code||'—')}${b.city?' <span class="muted" style="font-size:11px">'+esc(b.city)+'</span>':''}</td>
       <td>${esc(b.driver)}</td>
       <td>${esc(b.from_label)} ← ${esc(b.to_label)}</td>
       <td class="num">${fmt(b.seats)}</td>
-      <td class="num">﷼ ${fmt(b.fare)}</td>
+      <td class="num">${CUR[b.country_code]||''} ${fmt(b.fare)}</td>
       <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 
@@ -505,21 +563,20 @@ async function renderFinance(c){
   const f=await apiGet('/finance');
   c.innerHTML = `
     <div class="grid g4">
-      ${stat('الإيراد الإجمالي','﷼ '+fmt(f.gross),'💵','b-blue','مجموع أجور الحجوزات')}
-      ${stat('عمولة المنصة','﷼ '+fmt(f.commission),'💰','b-gr',`من كل الرحلات المكتملة`)}
-      ${stat('مدفوعات للسائقين','﷼ '+fmt(f.driverPayouts),'🏦','b-or','عمليات السحب')}
-      ${stat('المبالغ المُستردّة','﷼ '+fmt(f.refunds),'↩','b-am','رحلات ملغاة')}
+      ${stat('الإيراد الإجمالي','د.أ '+fmt(f.gross),'💵','b-blue','مجموع أجور الحجوزات')}
+      ${stat('عمولة المنصة','د.أ '+fmt(f.commission),'💰','b-gr',`من كل الرحلات المكتملة`)}
+      ${stat('مدفوعات للسائقين','د.أ '+fmt(f.driverPayouts),'🏦','b-or','عمليات السحب')}
+      ${stat('المبالغ المُستردّة','د.أ '+fmt(f.refunds),'↩','b-am','رحلات ملغاة')}
     </div>
-    <div class="row" style="align-items:center;margin:18px 0 10px"><h3 class="sec-title" style="margin:0">دفتر المعاملات الأخير</h3><span class="spacer"></span>
-      <input class="inp" style="max-width:240px" placeholder="بحث في الدفتر…" oninput="filterTable(this,'tblFin')"/>
-      <button class="btn btn-gh" style="margin-inline-start:10px" onclick="exportCsv('finance')">⬇ تصدير CSV</button></div>
+    <div class="row" style="align-items:center;margin:18px 0 10px"><h3 class="sec-title" style="margin:0">دفتر المعاملات الأخير</h3></div>
+    ${filterControls('tblFin',{placeholder:'بحث في الدفتر…',exportKind:'finance',filters:[{col:2,label:'النوع',options:[{v:'سائق',t:'سائق'},{v:'راكب',t:'راكب'},{v:'منصة',t:'منصة'}]}]})}
     <div class="card" style="padding:0;overflow:hidden"><table id="tblFin">
       <thead><tr><th>المستخدم</th><th>العملية</th><th>النوع</th><th>المبلغ</th></tr></thead>
       <tbody>${f.transactions.map(t=>`<tr>
         <td>${esc(t.user_name)}</td>
         <td>${esc(t.title)}</td>
-        <td><span class="tag ${t.scope==='driver'?'t-blue':'t-gray'}">${t.scope==='driver'?'سائق':'راكب'}</span></td>
-        <td class="num" style="color:${t.kind==='in'?'var(--green)':'var(--red)'}">${t.kind==='in'?'+':'−'}﷼ ${fmt(t.amount)}</td>
+        <td><span class="tag ${t.scope==='driver'?'t-blue':t.scope==='platform'?'t-green':'t-gray'}">${t.scope==='driver'?'سائق':t.scope==='platform'?'منصة':'راكب'}</span></td>
+        <td class="num" style="color:${t.kind==='in'?'var(--green)':'var(--red)'}">${t.kind==='in'?'+':'−'}${CUR[t.country_code]||'د.أ'} ${fmt(t.amount)}</td>
       </tr>`).join('')}</tbody></table></div>`;
 }
 
@@ -533,16 +590,17 @@ async function renderWithdrawals(c){
   c.innerHTML=`
     <div class="grid g4">
       ${stat('طلبات معلّقة',fmt(pending.length),'⏳','b-am','بانتظار المعالجة')}
-      ${stat('إجمالي المعلّق','﷼ '+fmt(totalPending),'🏦','b-or','مبالغ ستُحوّل')}
-      ${stat('إجمالي المدفوع','﷼ '+fmt(totalPaid),'✅','b-gr','حُوّلت للسائقين')}
+      ${stat('إجمالي المعلّق','د.أ '+fmt(totalPending),'🏦','b-or','مبالغ ستُحوّل')}
+      ${stat('إجمالي المدفوع','د.أ '+fmt(totalPaid),'✅','b-gr','حُوّلت للسائقين')}
     </div>
     <h3 class="sec-title" style="margin:18px 0 10px">طلبات السحب</h3>
-    <div class="card" style="padding:0;overflow:hidden"><table>
-      <thead><tr><th>السائق</th><th>الجوال</th><th>المبلغ</th><th>البنك / الآيبان</th><th>الحالة</th><th>إجراء</th></tr></thead>
+    ${filterControls('tblWd',{placeholder:'بحث بالسائق أو الجوال…',filters:[{col:4,label:'الحالة',options:[{v:'معلّق',t:'معلّق'},{v:'مدفوع',t:'مدفوع'},{v:'مرفوض',t:'مرفوض'}]}]})}
+    <div class="card" style="padding:0;overflow:hidden"><table id="tblWd">
+      <thead><tr><th>السائق</th><th>الجوال</th><th>المبلغ</th><th>البنك / الآيبان</th><th>الحالة</th><th data-nosort>إجراء</th></tr></thead>
       <tbody>${all.length?all.map(w=>`<tr>
         <td>${esc(w.user_name)}</td>
-        <td class="num">${esc((w.dial||'')+(w.user_phone||''))}</td>
-        <td class="num">﷼ ${fmt(w.amount)}</td>
+        <td class="num" dir="ltr" style="text-align:right">${esc((w.dial||'')+(w.user_phone||''))}</td>
+        <td class="num">${CUR[w.country_code]||'د.أ'} ${fmt(w.amount)}</td>
         <td>${esc(w.bank||'')}<div class="muted num" style="font-size:11px">${esc(w.iban||'')}</div></td>
         <td>${stTag(w.status)}</td>
         <td>${w.status==='pending'?`<button class="btn btn-pri" style="padding:5px 10px" onclick="wdAction(${w.id},'paid')">تم الدفع</button> <button class="btn btn-gh" style="padding:5px 10px" onclick="wdAction(${w.id},'reject')">رفض</button>`:(w.admin_note?esc(w.admin_note):'—')}</td>
@@ -552,7 +610,7 @@ async function renderWithdrawals(c){
 async function wdAction(id,action){
   let note=null;
   if(action==='reject'){ note=prompt('سبب الرفض (يصل للسائق):'); if(note===null) return; }
-  try{ await apiSend('/withdrawals/'+id,'PATCH',{action,note}); refresh(); refreshWdBadge(); }catch(e){ alert(e.message); }
+  try{ await apiSend('/withdrawals/'+id,'PATCH',{action,note}); toast(action==='paid'?'✅ تم تأكيد الدفع وإشعار السائق':'تم رفض الطلب وإعادة المبلغ للسائق'); refresh(); refreshWdBadge(); }catch(e){ toast('تعذّر: '+e.message); }
 }
 async function refreshWdBadge(){ try{ const d=await apiGet('/withdrawals?status=pending'); const b=$('#wdBadge'); const n=(d.withdrawals||[]).length; if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
 
@@ -588,7 +646,7 @@ async function renderSettings(c){
       <div class="field"><label>بريد الدعم</label><input id="as_supportEmail" value="${g('supportEmail','support@wasalni.app')}"></div>
       <div class="field"><label>رقم تواصل الدعم</label><input id="as_supportPhone" value="${g('supportPhone','+966500000000')}"></div>
       <div class="row" style="gap:10px">
-        <div class="field" style="flex:1"><label>أدنى أجرة (﷼)</label><input id="as_minFare" type="number" value="${g('minFare','5')}"></div>
+        <div class="field" style="flex:1"><label>أدنى أجرة (د.أ)</label><input id="as_minFare" type="number" value="${g('minFare','5')}"></div>
         <div class="field" style="flex:1"><label>أقصى مقاعد للرحلة</label><input id="as_maxSeats" type="number" value="${g('maxSeats','4')}"></div>
       </div>
       <button class="btn btn-pri" onclick="saveAppSettings()">حفظ الإعدادات العامة</button>
@@ -598,12 +656,12 @@ async function renderSettings(c){
     <div class="card">
       <h3 style="font-size:16px;margin-bottom:14px">💵 سياسة التسعير والمحفظة</h3>
       <div class="row" style="gap:10px">
-        <div class="field" style="flex:1"><label>رسوم الخدمة الثابتة (﷼)</label><input id="as_serviceFee" type="number" step="0.5" value="${g('serviceFee','0')}"></div>
-        <div class="field" style="flex:1"><label>رسوم الإلغاء (﷼)</label><input id="as_cancelFee" type="number" step="0.5" value="${g('cancelFee','0')}"></div>
+        <div class="field" style="flex:1"><label>رسوم الخدمة الثابتة (د.أ)</label><input id="as_serviceFee" type="number" step="0.5" value="${g('serviceFee','0')}"></div>
+        <div class="field" style="flex:1"><label>رسوم الإلغاء (د.أ)</label><input id="as_cancelFee" type="number" step="0.5" value="${g('cancelFee','0')}"></div>
       </div>
       <div class="row" style="gap:10px">
-        <div class="field" style="flex:1"><label>أدنى شحن للمحفظة (﷼)</label><input id="as_minTopup" type="number" value="${g('minTopup','20')}"></div>
-        <div class="field" style="flex:1"><label>أدنى سحب للسائق (﷼)</label><input id="as_minWithdraw" type="number" value="${g('minWithdraw','50')}"></div>
+        <div class="field" style="flex:1"><label>أدنى شحن للمحفظة (د.أ)</label><input id="as_minTopup" type="number" value="${g('minTopup','20')}"></div>
+        <div class="field" style="flex:1"><label>أدنى سحب للسائق (د.أ)</label><input id="as_minWithdraw" type="number" value="${g('minWithdraw','50')}"></div>
       </div>
       <label class="row" style="cursor:pointer;margin-bottom:12px;justify-content:space-between">
         <span>السماح بالدفع نقدًا للسائق</span>
@@ -738,9 +796,12 @@ async function exportCsv(kind){
 // ---------- فلترة جدول حيّة ----------
 function filterTable(input, tableId){
   const q=input.value.trim().toLowerCase();
+  const tbl=document.getElementById(tableId);
   document.querySelectorAll('#'+tableId+' tbody tr').forEach(tr=>{
+    if(tr.cells.length<=1) return;   // تجاهل صف «لا بيانات»
     tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
+  if(tbl&&tbl._updCount) tbl._updCount();
 }
 function searchBar(tableId, placeholder, exportKind){
   return `<div class="row" style="gap:10px;margin-bottom:14px;flex-wrap:wrap">
@@ -748,6 +809,37 @@ function searchBar(tableId, placeholder, exportKind){
     ${exportKind?`<button class="btn btn-gh" onclick="exportCsv('${exportKind}')">⬇ تصدير CSV</button>`:''}
   </div>`;
 }
+// شريط فلترة متقدّم: بحث + قوائم منسدلة لكل عمود + تصدير
+function filterControls(tableId, opts){
+  opts=opts||{};
+  const sels=(opts.filters||[]).map(f=>`<select class="inp" data-col="${f.col}" onchange="tableFilter('${tableId}')">
+    <option value="">${esc(f.label)}: الكل</option>
+    ${f.options.map(o=>`<option value="${esc(o.v)}">${esc(o.t)}</option>`).join('')}
+  </select>`).join('');
+  return `<div class="flt" id="flt_${tableId}">
+    <input class="inp" style="flex:1;min-width:200px;max-width:340px" placeholder="${esc(opts.placeholder||'بحث…')}" oninput="tableFilter('${tableId}')"/>
+    ${sels}
+    ${opts.dateCol!=null?`<input class="inp" type="date" data-datemin="${opts.dateCol}" title="من تاريخ" onchange="tableFilter('${tableId}')" style="max-width:160px">
+      <input class="inp" type="date" data-datemax="${opts.dateCol}" title="إلى تاريخ" onchange="tableFilter('${tableId}')" style="max-width:160px">`:''}
+    <span class="spacer"></span>
+    ${opts.exportKind?`<button class="btn btn-gh" onclick="exportCsv('${opts.exportKind}')">⬇ تصدير CSV</button>`:''}
+  </div>`;
+}
+function tableFilter(tableId){
+  const bar=document.getElementById('flt_'+tableId); const tbl=document.getElementById(tableId);
+  if(!bar||!tbl||!tbl.tBodies[0]) return;
+  const q=(bar.querySelector('input[placeholder]')?.value||'').trim().toLowerCase();
+  const sels=Array.from(bar.querySelectorAll('select')).map(s=>({col:+s.dataset.col,val:s.value}));
+  Array.from(tbl.tBodies[0].rows).forEach(tr=>{
+    if(tr.cells.length<=1) return;
+    let show=!q||tr.textContent.toLowerCase().includes(q);
+    if(show) for(const s of sels){ if(s.val && !((tr.cells[s.col]?.textContent||'').includes(s.val))){ show=false; break; } }
+    tr.style.display=show?'':'none';
+  });
+  if(tbl._updCount) tbl._updCount();
+}
+// خيارات الدول للفلاتر (من CC_NAMES)
+function countryFilterOptions(){ return Object.entries(CC_NAMES).map(([code,name])=>({v:name.split(' ').slice(1).join(' '),t:name})); }
 // ---------- رسم بياني خطّي/عمودي بسيط (SVG، بلا مكتبات) ----------
 function barChart(data, opts){
   opts=opts||{}; const W=opts.w||520, H=opts.h||180, pad=28;
@@ -778,7 +870,7 @@ async function renderCountries(c){
     <div class="grid g2">${countries.map(countryCard).join('')}</div>`;
 }
 function countryCard(c){
-  const cur=CUR[c.code]||'﷼';
+  const cur=CUR[c.code]||'د.أ';
   const pct = Math.round((c.profitValue||0)*100);
   const km12 = Math.min(c.pricePerKm, c.kmCap)*12;
   // مثال حساب فعلي حسب النوع
@@ -852,7 +944,7 @@ function switchType(code, type){
     flatBtn.className='btn '+(type==='flat'?'btn-pri':'btn-gh'); flatBtn.style.flex='1';
   }
   // حدّث تسمية الحقل وخطوته
-  const cur=CUR[code]||'﷼';
+  const cur=CUR[code]||'د.أ';
   const lbl=document.getElementById('pvlbl-'+code);
   const inp=document.getElementById('pv-'+code);
   if(lbl) lbl.textContent = type==='percent'?'النسبة المئوية (%)':'المبلغ لكل رحلة ('+cur+')';

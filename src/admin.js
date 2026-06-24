@@ -10,6 +10,10 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || 'wasalni-admin';   // كلمة 
 const r = express.Router();
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
+// رموز العملة لكل دولة (للإشعارات) — الافتراضي د.أ (الأردن)
+const CURR = { SA: 'ر.س', JO: 'د.أ', EG: 'ج.م', AE: 'د.إ', KW: 'د.ك', QA: 'ر.ق', BH: 'د.ب', OM: 'ر.ع', PS: '₪', IQ: 'د.ع', LB: 'ل.ل' };
+const curOf = (code) => CURR[code] || 'د.أ';
+
 // ---------- مصادقة المسؤول ----------
 r.post('/login', async (req, res) => {
   const { passcode } = req.body || {};
@@ -60,19 +64,17 @@ r.get('/stats', async (_req, res) => {
 r.get('/users', async (req, res) => {
   const role = req.query.role;
   const rows = await db.query(
-    `SELECT u.id,u.name,u.phone,u.dial,u.country_code,u.role,u.rating,u.wallet,u.earnings,u.status,u.verified,u.created_at
+    `SELECT u.id,u.name,u.phone,u.dial,u.country_code,u.city,u.role,u.rating,u.rating_count,u.wallet,u.earnings,u.status,u.verified,u.created_at
      FROM users u ${role ? 'WHERE u.role=?' : ''} ORDER BY u.created_at DESC`
   , [...(role ? [role] : [])]);
-  const out = [];
-  for (const u of rows) {
-    out.push({
-      ...u,
-      trips: (await db.queryOne('SELECT COUNT(*) c FROM trips WHERE driver_id=?', [u.id])).c,
-      bookings: (await db.queryOne('SELECT COUNT(*) c FROM bookings WHERE passenger_id=?', [u.id])).c,
-      vehicle: await db.queryOne('SELECT make,model,year,color,plate FROM vehicles WHERE user_id=?', [u.id]) || null,
-    });
-  }
-  res.json({ users: out });
+  // تجميع دفعةً واحدة لتفادي N+1 (4 استعلامات مهما بلغ عدد المستخدمين)
+  const tripRows = await db.query('SELECT driver_id, COUNT(*) c FROM trips GROUP BY driver_id', []);
+  const bookRows = await db.query('SELECT passenger_id, COUNT(*) c FROM bookings GROUP BY passenger_id', []);
+  const vehRows = await db.query('SELECT user_id, make, model, year, color, plate FROM vehicles', []);
+  const tripMap = {}; for (const t of tripRows) tripMap[t.driver_id] = Number(t.c);
+  const bookMap = {}; for (const b of bookRows) bookMap[b.passenger_id] = Number(b.c);
+  const vehMap = {}; for (const v of vehRows) vehMap[v.user_id] = { make: v.make, model: v.model, year: v.year, color: v.color, plate: v.plate };
+  res.json({ users: rows.map(u => ({ ...u, trips: tripMap[u.id] || 0, bookings: bookMap[u.id] || 0, vehicle: vehMap[u.id] || null })) });
 });
 
 // إيقaف/تفعيل مستخدم
@@ -192,7 +194,7 @@ r.post('/drivers/:id/verify', async (req, res) => {
 // ---------- الرحلات ----------
 r.get('/trips', async (_req, res) => {
   const rows = await db.query(
-    `SELECT t.*, u.name driver_name, u.phone driver_phone,
+    `SELECT t.*, u.name driver_name, u.phone driver_phone, u.country_code, u.city,
             (SELECT COUNT(*) FROM requests WHERE trip_id=t.id) req_count,
             (SELECT COUNT(*) FROM requests WHERE trip_id=t.id AND status IN ('accepted','onboard','dropped')) accepted_count
      FROM trips t JOIN users u ON u.id=t.driver_id ORDER BY t.created_at DESC LIMIT 200`
@@ -203,7 +205,7 @@ r.get('/trips', async (_req, res) => {
 // ---------- الحجوزات ----------
 r.get('/bookings', async (_req, res) => {
   const rows = await db.query(
-    `SELECT b.*, u.name passenger_name, u.phone passenger_phone
+    `SELECT b.*, u.name passenger_name, u.phone passenger_phone, u.country_code, u.city
      FROM bookings b JOIN users u ON u.id=b.passenger_id ORDER BY b.created_at DESC LIMIT 200`
   , []);
   res.json({ bookings: rows });
@@ -213,7 +215,7 @@ r.get('/bookings', async (_req, res) => {
 r.get('/withdrawals', async (req, res) => {
   const status = req.query.status;
   const rows = await db.query(
-    `SELECT w.*, u.name user_name, u.phone user_phone, u.dial
+    `SELECT w.*, u.name user_name, u.phone user_phone, u.dial, u.country_code
      FROM withdrawals w JOIN users u ON u.id=w.user_id
      ${status ? 'WHERE w.status=?' : ''} ORDER BY w.created_at DESC LIMIT 300`,
     [...(status ? [status] : [])]);
@@ -226,14 +228,15 @@ r.patch('/withdrawals/:id', async (req, res) => {
   const w = await db.queryOne('SELECT * FROM withdrawals WHERE id=?', [id]);
   if (!w) return bad(res, 'طلب السحب غير موجود', 404);
   if (w.status !== 'pending') return bad(res, 'تمت معالجة هذا الطلب مسبقًا');
+  const cur = curOf((await db.queryOne('SELECT country_code FROM users WHERE id=?', [w.user_id]) || {}).country_code);
   if (action === 'paid') {
     await db.execute('UPDATE withdrawals SET status=?, admin_note=?, paid_at=? WHERE id=?', ['paid', note, now(), id]);
-    await addNotif(w.user_id, 'wallet', 'green', 'تم تحويل أرباحك ✓', `${round2(w.amount)} ر.س إلى حسابك البنكي`, '/(driver)/dwallet');
+    await addNotif(w.user_id, 'wallet', 'green', 'تم تحويل أرباحك ✓', `${round2(w.amount)} ${cur} إلى حسابك البنكي`, '/(driver)/dwallet');
   } else if (action === 'reject') {
     // أعد المبلغ إلى أرباح السائق
     await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [w.amount, w.user_id]);
     await db.execute('UPDATE withdrawals SET status=?, admin_note=? WHERE id=?', ['rejected', note, id]);
-    await addNotif(w.user_id, 'x', 'red', 'لم يُعتمد طلب السحب', (note || 'تواصل مع الدعم') + ` — أُعيد ${round2(w.amount)} ر.س لرصيدك`, '/(driver)/dwallet');
+    await addNotif(w.user_id, 'x', 'red', 'لم يُعتمد طلب السحب', (note || 'تواصل مع الدعم') + ` — أُعيد ${round2(w.amount)} ${cur} لرصيدك`, '/(driver)/dwallet');
   } else return bad(res, 'إجراء غير صالح (paid|reject)');
   res.json({ ok: true });
 });
@@ -248,7 +251,7 @@ r.get('/finance', async (_req, res) => {
   const pendingWithdrawals = round2((await db.queryOne("SELECT COALESCE(SUM(amount),0) s FROM withdrawals WHERE status='pending'", [])).s);
   const refunds = round2((await db.queryOne("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE title LIKE 'استرجاع%'", [])).s);
   const recent = await db.query(
-    `SELECT t.id,t.title,t.amount,t.kind,t.scope,t.created_at, u.name user_name
+    `SELECT t.id,t.title,t.amount,t.kind,t.scope,t.created_at, u.name user_name, u.country_code
      FROM transactions t JOIN users u ON u.id=t.user_id ORDER BY t.created_at DESC LIMIT 60`
   , []);
   res.json({ gross, rate, commission, driverPayouts, pendingWithdrawals, refunds, transactions: recent });
