@@ -10,7 +10,7 @@ async function sendExpoPush(token, title, body, data) {
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ to: token, title, body, sound: 'default', priority: 'high', ...(data ? { data } : {}) }),
+      body: JSON.stringify({ to: token, title, body, sound: 'default', priority: 'high', channelId: 'wasalni-alerts', ...(data ? { data } : {}) }),
     });
   } catch (e) { /* تجاهل أخطاء الإرسال */ }
 }
