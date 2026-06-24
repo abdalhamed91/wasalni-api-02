@@ -812,6 +812,14 @@ function countryCard(c){
         <input id="cap-${c.code}" type="number" step="0.1" min="0" value="${c.kmCap}"></div>
     </div>
 
+    <div class="muted" style="font-size:12px;margin-bottom:8px">الضريبة وسعر الصرف</div>
+    <div class="row" style="gap:10px;margin-bottom:14px">
+      <div class="field" style="flex:1;margin:0"><label>ضريبة القيمة المضافة (%)</label>
+        <input id="tax-${c.code}" type="number" step="1" min="0" max="50" value="${Math.round((c.taxRate||0)*100)}"></div>
+      <div class="field" style="flex:1;margin:0"><label>سعر الصرف (للعملة الأساس)</label>
+        <input id="fx-${c.code}" type="number" step="0.0001" min="0" value="${c.exchangeRate||1}"></div>
+    </div>
+
     <div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.9">
       <b style="color:var(--navy)">📐 نظام الحساب لهذه الدولة:</b><br>
       • سعر المقعد = سعر/كم (${c.pricePerKm} ${cur}) × المسافة، بسقف ${c.kmCap} ${cur}/كم<br>
@@ -864,6 +872,8 @@ async function saveCountryFull(code){
     profitValue: type==='percent'? pvRaw/100 : pvRaw,
     pricePerKm: parseFloat(document.getElementById('ppk-'+code).value)||0,
     kmCap: parseFloat(document.getElementById('cap-'+code).value)||0,
+    taxRate: (parseFloat(document.getElementById('tax-'+code).value)||0)/100,
+    exchangeRate: parseFloat(document.getElementById('fx-'+code).value)||1,
   };
   const msg=document.getElementById('ccmsg-'+code);
   try{

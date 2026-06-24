@@ -278,18 +278,21 @@ r.get('/countries', async (_req, res) => {
   const active = await serviceCountries();
   const defRate = await commissionRate();
   const out = Object.entries(known).map(([code, name]) => {
-    const c = map[code] || { profit_type:'percent', profit_value: defRate, price_per_km:1.5, km_cap:2.5 };
+    const c = map[code] || { profit_type:'percent', profit_value: defRate, price_per_km:1.5, km_cap:2.5, tax_rate:0, exchange_rate:1 };
     return { code, name, enabled: active.includes(code),
       profitType: c.profit_type, profitValue: c.profit_value,
-      pricePerKm: c.price_per_km, kmCap: c.km_cap };
+      pricePerKm: c.price_per_km, kmCap: c.km_cap,
+      taxRate: c.tax_rate != null ? c.tax_rate : 0, exchangeRate: c.exchange_rate != null ? c.exchange_rate : 1 };
   });
   res.json({ countries: out });
 });
 
 r.patch('/countries/:code', async (req, res) => {
   const code = String(req.params.code).toUpperCase();
-  const { profitType, profitValue, pricePerKm, kmCap, enabled } = req.body || {};
+  const { profitType, profitValue, pricePerKm, kmCap, enabled, taxRate, exchangeRate } = req.body || {};
   if (profitType && !['percent','flat'].includes(profitType)) return bad(res, 'نوع الربح غير صالح (percent|flat)');
+  if (taxRate !== undefined && (!Number.isFinite(Number(taxRate)) || Number(taxRate) < 0 || Number(taxRate) > 0.5)) return bad(res, 'الضريبة يجب أن تكون بين 0 و 50%');
+  if (exchangeRate !== undefined && (!Number.isFinite(Number(exchangeRate)) || Number(exchangeRate) <= 0)) return bad(res, 'سعر الصرف غير صالح');
   const pv = Number(profitValue);
   if (profitValue !== undefined) {
     if (!Number.isFinite(pv) || pv < 0) return bad(res, 'قيمة الربح غير صالحة');
@@ -303,6 +306,8 @@ r.patch('/countries/:code', async (req, res) => {
   if (profitValue !== undefined) patch.profit_value = pv;
   if (pricePerKm !== undefined) patch.price_per_km = Number(pricePerKm);
   if (kmCap !== undefined) patch.km_cap = Number(kmCap);
+  if (taxRate !== undefined) patch.tax_rate = Number(taxRate);
+  if (exchangeRate !== undefined) patch.exchange_rate = Number(exchangeRate);
   if (enabled !== undefined) patch.enabled = enabled ? 1 : 0;
   const updated = await setCountrySetting(code, patch);
   // مزامنة قائمة الدول المخدومة مع علم enabled

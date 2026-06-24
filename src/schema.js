@@ -280,6 +280,9 @@ async function runMigrations() {
   await ensureColumn('requests', 'rated', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
   // نوع خدمة السائق: carpool | public_bus | school_bus
   await ensureColumn('users', 'service_type', "TEXT DEFAULT 'carpool'");
+  // ضريبة القيمة المضافة وسعر الصرف لكل دولة (يديرهما المشرف)
+  await ensureColumn('country_settings', 'tax_rate', 'REAL NOT NULL DEFAULT 0');
+  await ensureColumn('country_settings', 'exchange_rate', 'REAL NOT NULL DEFAULT 1');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
@@ -312,6 +315,18 @@ async function initSchema() {
       [code, pt, pv, ppk, cap]
     );
   }
+  // بذر ضريبة القيمة المضافة الافتراضية لمرة واحدة (لا يعكس تعديل المشرف لاحقًا)
+  try {
+    const seeded = await db.queryOne("SELECT value FROM config WHERE key='tax_seeded'");
+    if (!seeded) {
+      const taxSeed = { JO: 0.16, SA: 0.15, EG: 0.14, AE: 0.05, BH: 0.10, OM: 0.05, PS: 0.16, LB: 0.11, QA: 0, KW: 0, IQ: 0 };
+      for (const [code, t] of Object.entries(taxSeed)) {
+        await db.execute('UPDATE country_settings SET tax_rate=? WHERE code=?', [t, code]);
+      }
+      const ex = PG ? 'EXCLUDED' : 'excluded';
+      await db.execute(`INSERT INTO config (key,value) VALUES ('tax_seeded','1') ON CONFLICT(key) DO UPDATE SET value=${ex}.value`, []);
+    }
+  } catch (e) { /* غير حرج */ }
   console.log(`✅ المخطّط جاهز (${db.kind})`);
 }
 

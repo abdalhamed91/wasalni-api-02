@@ -72,13 +72,16 @@ async function setCountrySetting(code, patch) {
   const cur = await countrySetting(code);
   const next = { ...cur, ...patch, code };
   const enabledVal = db.kind === 'postgres' ? !!next.enabled : (next.enabled ? 1 : 0);
+  const taxVal = Number(next.tax_rate != null ? next.tax_rate : 0);
+  const fxVal = Number(next.exchange_rate != null ? next.exchange_rate : 1);
   const ex = db.kind === 'postgres' ? 'EXCLUDED' : 'excluded';
   await db.execute(
-    `INSERT INTO country_settings (code,profit_type,profit_value,price_per_km,km_cap,enabled)
-     VALUES (?,?,?,?,?,?)
+    `INSERT INTO country_settings (code,profit_type,profit_value,price_per_km,km_cap,enabled,tax_rate,exchange_rate)
+     VALUES (?,?,?,?,?,?,?,?)
      ON CONFLICT(code) DO UPDATE SET profit_type=${ex}.profit_type, profit_value=${ex}.profit_value,
-       price_per_km=${ex}.price_per_km, km_cap=${ex}.km_cap, enabled=${ex}.enabled`,
-    [code, next.profit_type, Number(next.profit_value), Number(next.price_per_km), Number(next.km_cap), enabledVal]
+       price_per_km=${ex}.price_per_km, km_cap=${ex}.km_cap, enabled=${ex}.enabled,
+       tax_rate=${ex}.tax_rate, exchange_rate=${ex}.exchange_rate`,
+    [code, next.profit_type, Number(next.profit_value), Number(next.price_per_km), Number(next.km_cap), enabledVal, taxVal, fxVal]
   );
   return countrySetting(code);
 }

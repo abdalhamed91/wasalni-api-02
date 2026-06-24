@@ -79,7 +79,15 @@ r.post('/auth/otp/verify', async (req, res) => {
 r.use(authRequired);
 
 // ============ الملف الشخصي ============
-r.get('/me', async (req, res) => res.json({ user: await publicUser(req.user) }));
+r.get('/me', async (req, res) => {
+  const cs = await countrySetting(req.user.country_code);
+  res.json({
+    user: await publicUser(req.user),
+    taxRate: cs && cs.tax_rate != null ? Number(cs.tax_rate) : 0,
+    exchangeRate: cs && cs.exchange_rate != null ? Number(cs.exchange_rate) : 1,
+    currency: curSym(req.user.country_code),
+  });
+});
 
 r.patch('/me', async (req, res) => {
   const { name, email, role, countryCode, dial, gender } = req.body || {};
