@@ -226,6 +226,13 @@ const TABLES = [
     comment TEXT,
     created_at ${NOW}
   )`,
+  `CREATE TABLE IF NOT EXISTS promo_redemptions (
+    id ${ID},
+    promo_id ${INT} NOT NULL,
+    user_id ${INT} NOT NULL,
+    amount REAL NOT NULL DEFAULT 0,
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL

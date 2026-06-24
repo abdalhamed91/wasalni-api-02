@@ -90,6 +90,8 @@ async function authRequired(req, res, next) {
     const { uid } = jwt.verify(token, SECRET);
     const user = await db.queryOne('SELECT * FROM users WHERE id=?', [uid]);
     if (!user) return res.status(401).json({ error: 'حساب غير موجود' });
+    // الإيقاف من الإدارة يُطبَّق فورًا: يُمنع الموقوف من استخدام التطبيق
+    if (user.status === 'suspended') return res.status(403).json({ error: 'تم إيقاف حسابك. تواصل مع الدعم.', suspended: true });
     req.user = user;
     next();
   } catch {

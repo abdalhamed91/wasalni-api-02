@@ -254,6 +254,34 @@ r.post('/wallet/transfer', async (req, res) => {
   res.json({ balance, to: recipient.name || toPhone, amount });
 });
 
+// استبدال كود عرض → رصيد محفظة (للأكواد ذات المبلغ المقطوع)
+r.post('/promos/redeem', async (req, res) => {
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  if (!code) return bad(res, 'أدخل كود العرض');
+  const p = await db.queryOne('SELECT * FROM promos WHERE UPPER(code)=?', [code]);
+  if (!p || !Number(p.active)) return bad(res, 'كود غير صالح أو غير مفعّل');
+  if (p.expires_at && Number(p.expires_at) < Date.now()) return bad(res, 'انتهت صلاحية هذا الكود');
+  // تقييد الدولة (إن حُدّدت)
+  const u = await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]);
+  if (p.country && p.country !== (u && u.country_code)) return bad(res, 'هذا الكود غير متاح في بلدك');
+  // حدّ الاستخدام الكلّي
+  if (Number(p.max_uses) > 0 && Number(p.used_count) >= Number(p.max_uses)) return bad(res, 'انتهت مرّات استخدام هذا الكود');
+  // مرّة واحدة لكل مستخدم
+  const prev = await db.queryOne('SELECT id FROM promo_redemptions WHERE promo_id=? AND user_id=?', [p.id, req.user.id]);
+  if (prev) return bad(res, 'سبق أن استخدمت هذا الكود');
+  if (p.discount_type !== 'flat') return bad(res, 'هذا الكود يُطبَّق تلقائيًا عند الحجز، لا يُستبدل رصيدًا');
+  const amount = round2(Number(p.discount_value));
+  if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'قيمة الكود غير صالحة');
+  // أضِف الرصيد وسجّل الاستبدال ذرّيًّا قدر الإمكان
+  await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [amount, req.user.id]);
+  await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [p.id]);
+  await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [p.id, req.user.id, amount, now()]);
+  await addTxn(req.user.id, 'passenger', `كود عرض: ${p.title || code}`, amount, 'in');
+  await addNotif(req.user.id, 'wallet', 'green', 'تم تطبيق كود العرض 🎁', `${amount} ${await userCur(req.user.id)} أُضيفت لمحفظتك`, '/(passenger)/wallet');
+  const balance = round2((await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id])).wallet);
+  res.json({ balance, amount, title: p.title || code });
+});
+
 // ============ مسارات السائق ============
 r.get('/trips', async (req, res) => {
   const trips = await db.query('SELECT * FROM trips WHERE driver_id=? ORDER BY created_at DESC', [req.user.id]);
