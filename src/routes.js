@@ -516,6 +516,21 @@ r.post('/reports', async (req, res) => {
   res.status(201).json({ ok: true, id: reportId });
 });
 
+// ============ تذاكر الدعم (من التطبيق → قسم الدعم بالإدارة، لا الرسائل) ============
+r.post('/support', async (req, res) => {
+  const subject = String(req.body?.subject || '').trim().slice(0, 120);
+  const message = String(req.body?.message || '').trim().slice(0, 2000);
+  if (!message) return bad(res, 'اكتب رسالتك للدعم');
+  const id = await insertReturningId('support_tickets',
+    ['user_id','user_name','subject','message','status','created_at'],
+    [req.user.id, req.user.name || 'مستخدم', subject || 'استفسار عام', message, 'open', now()]);
+  res.status(201).json({ ok: true, id });
+});
+r.get('/support', async (req, res) => {
+  const rows = await db.query('SELECT id,subject,message,status,reply,created_at FROM support_tickets WHERE user_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+  res.json({ tickets: rows });
+});
+
 // ============ التسعير حسب المسافة ============
 r.get('/pricing/quote', async (req, res) => {
   const km = Number(req.query.km);
