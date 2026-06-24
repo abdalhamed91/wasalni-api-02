@@ -10,7 +10,8 @@ const DEV_MODE = process.env.NODE_ENV !== 'production';
 
 // إرسال SMS فعلي (يُفعّل في الإنتاج عبر مزوّد). انظر sms.js
 let sendSms = null;
-try { sendSms = require('./sms').sendSms; } catch { sendSms = null; }
+let detectProvider = () => null;
+try { const sms = require('./sms'); sendSms = sms.sendSms; if (sms.detectProvider) detectProvider = sms.detectProvider; } catch { sendSms = null; }
 
 async function sendOtp(phone, dial) {
   // منع إعادة الإرسال المتكرّر
@@ -26,20 +27,22 @@ async function sendOtp(phone, dial) {
      ON CONFLICT(phone) DO UPDATE SET code=${ex}.code, expires_at=${ex}.expires_at, attempts=0, sent_at=${ex}.sent_at`,
     [phone, code, now() + OTP_TTL_MS, now()]
   );
-  // أرسل SMS حقيقي إن كان المزوّد مفعّلًا، وإلا أعد الرمز في التطوير فقط
-  if (sendSms && !DEV_MODE) {
+  // أرسل SMS حقيقي فقط عند تهيئة مزوّد فعلي (Unifonic/Twilio عبر متغيّرات البيئة)
+  const smsReady = !!(sendSms && detectProvider());
+  if (smsReady) {
     const message = `رمز التحقق في وصلني: ${code}\nصالح لمدة 5 دقائق. لا تشاركه مع أحد.`;
     try {
       await sendSms((dial || '+966') + phone, message);
     } catch (e) {
       console.error('فشل إرسال SMS:', e.message);
-      // احذف الرمز حتى لا يبقى معلّقًا بلا إرسال
       await db.execute('DELETE FROM otps WHERE phone=?', [phone]);
       return { error: 'تعذّر إرسال رمز التحقق، حاول لاحقًا' };
     }
     return { sent: true };
   }
-  return { devCode: DEV_MODE ? code : null, sent: true };
+  // لا مزوّد SMS مُهيّأ → أعِد الرمز ليُعرض داخل التطبيق (تجربة/إطلاق مبكر بلا SMS)
+  // بمجرّد ضبط متغيّرات مزوّد SMS، يتحوّل تلقائيًا لإرسال حقيقي ويتوقّف إظهار الرمز.
+  return { devCode: code, sent: true };
 }
 
 // تحقّق خفيف من الرمز (لتغيير الهاتف/التحقّق دون تسجيل دخول) — يستهلك الرمز عند النجاح
