@@ -81,12 +81,13 @@ r.use(authRequired);
 // ============ الملف الشخصي ============
 r.get('/me', async (req, res) => {
   const cs = await countrySetting(req.user.country_code);
-  // رسالة ترحيب السائق (يضبطها الأدمن من الإعدادات العامة)
-  let driverWelcome = null;
+  // نصوص يضبطها الأدمن من الإعدادات العامة (ترحيب السائق + تحية الرئيسية)
+  let driverWelcome = null, homeGreeting = null;
   try {
-    const rows = await db.query("SELECT key,value FROM app_settings WHERE key IN ('driverWelcomeTitle','driverWelcomeMsg')", []);
+    const rows = await db.query("SELECT key,value FROM app_settings WHERE key IN ('driverWelcomeTitle','driverWelcomeMsg','homeGreeting')", []);
     const m = Object.fromEntries(rows.map(x => [x.key, x.value]));
     if (m.driverWelcomeTitle || m.driverWelcomeMsg) driverWelcome = { title: m.driverWelcomeTitle || '', msg: m.driverWelcomeMsg || '' };
+    if (m.homeGreeting) homeGreeting = m.homeGreeting;
   } catch (e) { /* تجاهل */ }
   res.json({
     user: await publicUser(req.user),
@@ -94,6 +95,7 @@ r.get('/me', async (req, res) => {
     exchangeRate: cs && cs.exchange_rate != null ? Number(cs.exchange_rate) : 1,
     currency: curSym(req.user.country_code),
     driverWelcome,
+    homeGreeting,
   });
 });
 
@@ -763,8 +765,15 @@ r.get('/driver/ride-requests', async (req, res) => {
 // يُتمّ الاتفاق: يخصم الأجرة المتّفق عليها، وينشئ رحلة + حجزًا مؤكّدًا (ذرّيًّا)
 async function finalizeRideRequest(rr, driverId, finalFare) {
   const fare = round2(finalFare);
+  // 1) اطلب الطلب ذرّيًا (يمنع الإتمام المزدوج إن ضُغط مرّتين أو من جهازين)
+  const claim = await db.execute("UPDATE ride_requests SET status='accepted', driver_id=? WHERE id=? AND status IN ('offered','countered')", [driverId, rr.id]);
+  if (!claim.rowCount) return { error: 'لم يعد هذا الطلب متاحًا' };
+  // 2) اخصم الأجرة ذرّيًا — وأعِد الطلب لحالته السابقة إن فشل الدفع
   const pay = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, rr.passenger_id, fare]);
-  if (!pay.rowCount) return { error: 'رصيد الراكب غير كافٍ لإتمام الطلب' };
+  if (!pay.rowCount) {
+    await db.execute('UPDATE ride_requests SET status=? WHERE id=?', [rr.status, rr.id]);
+    return { error: 'رصيد الراكب غير كافٍ لإتمام الطلب' };
+  }
   const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [driverId]);
   const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [driverId]) || {};
   const tTime = rr.ride_time || 'الآن';
@@ -778,7 +787,7 @@ async function finalizeRideRequest(rr, driverId, finalFare) {
   const bookingId = await insertReturningId('bookings',
     ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','status','created_at'],
     [rr.passenger_id, reqId, drv.name || 'سائق', 5, car, veh.plate || '', rr.from_label, rr.to_label, '', rr.seats, fare, 'confirmed', now()]);
-  await db.execute("UPDATE ride_requests SET status='accepted', driver_id=?, trip_id=?, fare=? WHERE id=?", [driverId, tripId, fare, rr.id]);
+  await db.execute("UPDATE ride_requests SET trip_id=?, fare=? WHERE id=?", [tripId, fare, rr.id]);
   await addTxn(rr.passenger_id, 'passenger', `توصيلة · ${rr.from_label} ← ${rr.to_label}`, fare, 'out');
   await addNotif(rr.passenger_id, 'check', 'green', 'تم الاتفاق على رحلتك ✓', `${drv.name || 'سائق'} في طريقه إليك — تابع موقعه`, '/(passenger)/tracking');
   await addNotif(driverId, 'car', 'blue', 'تم الاتفاق على توصيلة', `${rr.from_label} ← ${rr.to_label} · ${fare}`, '/(driver)/dmytrips');
@@ -794,7 +803,11 @@ r.post('/ride-requests/:id/offer', async (req, res) => {
   if (rr.status === 'countered' && rr.driver_id && rr.driver_id !== req.user.id) return bad(res, 'الطلب قيد التفاوض مع سائق آخر');
   const fare = round2(Number(req.body?.fare) || rr.fare);
   if (!(fare > 0)) return bad(res, 'سعر غير صالح');
-  await db.execute("UPDATE ride_requests SET status='offered', driver_id=?, offered_fare=?, offer_by='driver' WHERE id=?", [req.user.id, fare, rr.id]);
+  // ذرّيًا: لا يعرض إلا على طلب ما زال مفتوحًا أو مُقابلًا لنفس السائق (يمنع سباق سائقَين)
+  const upd = await db.execute(
+    "UPDATE ride_requests SET status='offered', driver_id=?, offered_fare=?, offer_by='driver' WHERE id=? AND (status='open' OR (status='countered' AND driver_id=?))",
+    [req.user.id, fare, rr.id, req.user.id]);
+  if (!upd.rowCount) return bad(res, 'هذا الطلب لم يعد متاحًا');
   const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
   await addNotif(rr.passenger_id, 'wallet', 'amber', 'عرض سعر لتوصيلتك 🚕', `${drv ? drv.name : 'سائق'} عرض ${fare} — وافق أو اقترح سعرًا`, '/(passenger)/myrequests');
   res.json({ ok: true, status: 'offered', offeredFare: fare });

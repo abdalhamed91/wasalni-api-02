@@ -710,6 +710,14 @@ async function renderSettings(c){
     </div>
 
     <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">🏠 تحية الصفحة الرئيسية للراكب</h3>
+      <p class="muted" style="font-size:12.5px;margin-bottom:12px">النص الكبير أعلى رئيسية الراكب.</p>
+      <div class="field"><label>نص التحية</label><input id="as_homeGreeting" value="${g('homeGreeting','وين ودّك توصل اليوم؟')}"></div>
+      <button class="btn btn-pri" onclick="saveHomeGreeting()">حفظ التحية</button>
+      <div id="hgMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
       <h3 style="font-size:16px;margin-bottom:14px">💵 سياسة التسعير والمحفظة</h3>
       <div class="row" style="gap:10px">
         <div class="field" style="flex:1"><label>رسوم الخدمة الثابتة (د.أ)</label><input id="as_serviceFee" type="number" step="0.5" value="${g('serviceFee','0')}"></div>
@@ -817,6 +825,10 @@ async function saveDriverWelcome(){
   const b={driverWelcomeTitle:$('#as_dwTitle').value,driverWelcomeMsg:$('#as_dwMsg').value};
   try{ await apiSend('/app-settings','PATCH',b); $('#dwMsg').textContent='✓ حُفظت رسالة الترحيب'; $('#dwMsg').style.color='var(--green)'; toast('✓ حُفظت رسالة الترحيب'); }
   catch(e){ $('#dwMsg').textContent=e.message; $('#dwMsg').style.color='var(--red)'; }
+}
+async function saveHomeGreeting(){
+  try{ await apiSend('/app-settings','PATCH',{homeGreeting:$('#as_homeGreeting').value}); $('#hgMsg').textContent='✓ حُفظت التحية'; $('#hgMsg').style.color='var(--green)'; toast('✓ حُفظت تحية الرئيسية'); }
+  catch(e){ $('#hgMsg').textContent=e.message; $('#hgMsg').style.color='var(--red)'; }
 }
 async function saveToggles(){
   const b={maintenance:$('#as_maintenance').checked?'1':'0',allowDrivers:$('#as_allowDrivers').checked?'1':'0',showPromos:$('#as_showPromos').checked?'1':'0'};
