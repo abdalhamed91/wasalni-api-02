@@ -518,6 +518,7 @@ r.get('/bookings/:id/track', async (req, res) => {
     requestStatus: request ? request.status : null, // pending | accepted | onboard | dropped | rejected
     tripStatus: trip ? trip.status : null,          // scheduled | live | completed
     status: trip ? trip.status : b.status,
+    rated: db.kind === 'postgres' ? !!b.rated : !!Number(b.rated),
     driver: hasLoc ? [trip.driver_lat, trip.driver_lng] : null,
     locAt: trip ? trip.driver_loc_at : null,
     fromLabel: trip ? trip.from_label : b.from_label,
@@ -525,6 +526,14 @@ r.get('/bookings/:id/track', async (req, res) => {
     fromCoord: trip ? [trip.from_lat, trip.from_lng] : null,
     toCoord: trip ? [trip.to_lat, trip.to_lng] : null,
   });
+});
+
+// السائق وصل لنقطة الالتقاط → إشعار للركّاب المؤكّدين
+r.post('/trips/:id/arrived', async (req, res) => {
+  const trip = await ownTrip(req, res); if (!trip) return;
+  const pax = await db.query("SELECT passenger_id FROM requests WHERE trip_id=? AND status IN ('accepted','onboard') AND passenger_id IS NOT NULL", [trip.id]);
+  for (const p of pax) await addNotif(p.passenger_id, 'pin', 'green', 'وصل السائق لنقطة الالتقاط 📍', 'سائقك في انتظارك الآن — توجّه إليه', '/(passenger)/tracking');
+  res.json({ ok: true, notified: pax.length });
 });
 
 r.post('/trips/:id/complete', async (req, res) => {
@@ -928,8 +937,8 @@ r.post('/bookings', async (req, res) => {
     await addNotif(req.user.id, 'wallet', 'green', 'طُبّق كود الخصم 🎁', `وفّرت ${discount} ${await userCur(req.user.id)} على رحلتك`);
   }
   // المبلغ محجوز (مخصوم) بانتظار موافقة السائق — يُسترجع تلقائيًا عند الرفض
-  await addNotif(req.user.id, 'time', 'amber', 'تم إرسال طلبك', `بانتظار موافقة السائق · ${trip.from_label} ← ${trip.to_label}`, '/(passenger)/tracking');
-  await addNotif(trip.driver_id, 'user', 'blue', 'طلب حجز جديد', `${u.name || 'راكب'} · ${s} مقعد`, '/(driver)/requests');
+  await addNotif(req.user.id, 'time', 'amber', 'تم إرسال طلبك', `بانتظار موافقة السائق · ${trip.from_label} ← ${trip.to_label}`, `/(passenger)/tracking?bookingId=${bookingId}`);
+  await addNotif(trip.driver_id, 'user', 'blue', 'طلب حجز جديد', `${u.name || 'راكب'} · ${s} مقعد`, `/(driver)/requests?tripId=${trip.id}`);
 
   const booking = await db.queryOne('SELECT * FROM bookings WHERE id=?', [bookingId]);
   const walletRow = await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id]);
