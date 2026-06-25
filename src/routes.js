@@ -553,7 +553,7 @@ r.get('/rides/search', async (req, res) => {
   const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
   const O = (num(req.query.fromLat) != null && num(req.query.fromLng) != null) ? [num(req.query.fromLat), num(req.query.fromLng)] : null;
   const D = (num(req.query.toLat) != null && num(req.query.toLng) != null) ? [num(req.query.toLat), num(req.query.toLng)] : null;
-  const corridorKm = Math.min(10, Math.max(1, num(req.query.radiusKm) || 3));
+  const corridorKm = Math.min(20, Math.max(2, num(req.query.radiusKm) || 6));   // نصف قطر الممرّ (افتراضي 6كم)
 
   const sql = `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating, d.rating_count AS driver_rating_count, d.gender AS driver_gender, d.country_code AS driver_country,
             v.make, v.model, v.color, v.plate
@@ -574,22 +574,36 @@ r.get('/rides/search', async (req, res) => {
   if (country) trips = trips.filter(t => (t.driver_country || '').toUpperCase() === country);
   if (femaleOnly) trips = trips.filter(t => t.driver_gender === 'female' || t.gender_pref === 'female');
 
-  // مطابقة المسار: إن وُفّرت إحداثيات الراكب — اعرض الرحلات التي يمرّ مسارها قرب نقطتي الراكب بنفس الاتجاه
+  // مطابقة ذكية هجينة: يَظهر المسار إن مرّ ممرّه قرب نقطتي الراكب (دائرة بنصف قطر corridorKm)
+  // بنفس الاتجاه، أو إن طابق النص (الوجهة/المدينة). الأقرب للممرّ يظهر أولًا.
   let matchInfo = new Map();
-  if (O && D) {
+  const hasGeo = !!(O || D);
+  const hasText = !!(to || city);
+  if (hasGeo || hasText) {
     trips = trips.filter(t => {
       const A = [t.from_lat, t.from_lng], B = [t.to_lat, t.to_lng];
-      if (!validPt(A) || !validPt(B)) return matchLabel(city || to || '')(t); // بلا إحداثيات للرحلة: عُد للنص
-      const iO = pointToSegment(O, A, B), iD = pointToSegment(D, A, B);
-      const onRoute = iO.dist <= corridorKm && iD.dist <= corridorKm && iO.t < iD.t - 0.01;
-      if (onRoute) matchInfo.set(t.id, { iO, iD, detourKm: Math.round((iO.dist + iD.dist) * 10) / 10 });
-      return onRoute;
+      // 1) مطابقة الممرّ (إن توفّرت إحداثيات للرحلة وللراكب)
+      if (hasGeo && validPt(A) && validPt(B)) {
+        if (O && D) {
+          const iO = pointToSegment(O, A, B), iD = pointToSegment(D, A, B);
+          if (iO.dist <= corridorKm && iD.dist <= corridorKm && iO.t < iD.t) {
+            matchInfo.set(t.id, { iO, iD, detourKm: Math.round((iO.dist + iD.dist) * 10) / 10 });
+            return true;
+          }
+        } else {
+          const P = O || D; const iP = pointToSegment(P, A, B);
+          if (iP.dist <= corridorKm) { matchInfo.set(t.id, { iO: iP, iD: iP, detourKm: Math.round(iP.dist * 10) / 10 }); return true; }
+        }
+      }
+      // 2) مطابقة قرب الوجهة/الانطلاق نقطةً لنقطة (إن للرحلة إحداثيات والوجهة محدّدة)
+      if (D && validPt(B) && haversineKm(D, B) <= corridorKm) { matchInfo.set(t.id, { detourKm: Math.round(haversineKm(D, B) * 10) / 10 }); return true; }
+      if (O && validPt(A) && haversineKm(O, A) <= corridorKm) { matchInfo.set(t.id, { detourKm: Math.round(haversineKm(O, A) * 10) / 10 }); return true; }
+      // 3) مطابقة نصية (الوجهة أو المدينة) كحل احتياطي
+      if (hasText && (matchLabel(to || '')(t) || matchLabel(city || '')(t))) return true;
+      return false;
     });
-    // الأقرب للمسار أولًا
-    trips.sort((a, b) => (matchInfo.get(a.id)?.detourKm ?? 99) - (matchInfo.get(b.id)?.detourKm ?? 99));
-  } else {
-    if (to) trips = trips.filter(matchLabel(to));
-    if (city) trips = trips.filter(matchLabel(city));
+    // الأقرب للممرّ أولًا، ثم مطابقات النص
+    trips.sort((a, b) => (matchInfo.get(a.id)?.detourKm ?? 999) - (matchInfo.get(b.id)?.detourKm ?? 999));
   }
 
   const rides = trips.map(t => {
