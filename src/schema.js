@@ -302,6 +302,15 @@ async function runMigrations() {
   // ضريبة القيمة المضافة وسعر الصرف لكل دولة (يديرهما المشرف)
   await ensureColumn('country_settings', 'tax_rate', 'REAL NOT NULL DEFAULT 0');
   await ensureColumn('country_settings', 'exchange_rate', 'REAL NOT NULL DEFAULT 1');
+  // تواريخ انتهاء وثائق السائق + تتبّع آخر تنبيه (YYYY-MM-DD)
+  await ensureColumn('users', 'license_expiry', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'vehicle_reg_expiry', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'insurance_expiry', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'doc_expiry_notified', "TEXT DEFAULT ''");
+  // توثيق البريد الإلكتروني برمز
+  await ensureColumn('users', 'email_verified', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
+  await ensureColumn('users', 'email_otp', "TEXT DEFAULT ''");
+  await ensureColumn('users', 'email_otp_exp', PG ? 'BIGINT' : 'INTEGER');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

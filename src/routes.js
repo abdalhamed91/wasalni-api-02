@@ -81,23 +81,31 @@ r.use(authRequired);
 // ============ الملف الشخصي ============
 r.get('/me', async (req, res) => {
   const cs = await countrySetting(req.user.country_code);
+  // رسالة ترحيب السائق (يضبطها الأدمن من الإعدادات العامة)
+  let driverWelcome = null;
+  try {
+    const rows = await db.query("SELECT key,value FROM app_settings WHERE key IN ('driverWelcomeTitle','driverWelcomeMsg')", []);
+    const m = Object.fromEntries(rows.map(x => [x.key, x.value]));
+    if (m.driverWelcomeTitle || m.driverWelcomeMsg) driverWelcome = { title: m.driverWelcomeTitle || '', msg: m.driverWelcomeMsg || '' };
+  } catch (e) { /* تجاهل */ }
   res.json({
     user: await publicUser(req.user),
     taxRate: cs && cs.tax_rate != null ? Number(cs.tax_rate) : 0,
     exchangeRate: cs && cs.exchange_rate != null ? Number(cs.exchange_rate) : 1,
     currency: curSym(req.user.country_code),
+    driverWelcome,
   });
 });
 
 r.patch('/me', async (req, res) => {
-  const { name, email, role, countryCode, dial, gender, avatar } = req.body || {};
+  const { name, email, role, countryCode, dial, gender, avatar, birthDate } = req.body || {};
   if (role && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
   if (gender && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
   await db.execute(`UPDATE users SET
       name = COALESCE(?, name), email = COALESCE(?, email),
       role = COALESCE(?, role), country_code = COALESCE(?, country_code), dial = COALESCE(?, dial),
-      gender = COALESCE(?, gender), avatar = COALESCE(?, avatar)
-    WHERE id=?`, [name ?? null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, req.user.id]);
+      gender = COALESCE(?, gender), avatar = COALESCE(?, avatar), birth_date = COALESCE(?, birth_date)
+    WHERE id=?`, [name ?? null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, birthDate ?? null, req.user.id]);
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u) });
 });
@@ -125,6 +133,32 @@ r.post('/me/phone/verify', async (req, res) => {
   await db.execute('UPDATE users SET phone=?, dial=? WHERE id=?', [phone, dial, req.user.id]);
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u) });
+});
+
+// ---- توثيق البريد الإلكتروني برمز يصل للبريد (devCode في وضع التجربة) ----
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+r.post('/me/email/otp', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) return bad(res, 'بريد إلكتروني غير صالح');
+  const taken = await db.queryOne('SELECT id FROM users WHERE LOWER(email)=? AND email_verified=1', [email]);
+  if (taken && taken.id !== req.user.id) return bad(res, 'هذا البريد موثّق بحساب آخر');
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  await db.execute('UPDATE users SET email_otp=?, email_otp_exp=? WHERE id=?', [code, now() + 10 * 60 * 1000, req.user.id]);
+  const { sendEmailOtp } = require('./email');
+  const r2 = await sendEmailOtp(email, code);
+  res.json({ sent: true, devCode: r2.devCode || undefined });
+});
+r.post('/me/email/verify', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const code = String(req.body?.code || '').trim();
+  if (!EMAIL_RE.test(email)) return bad(res, 'بريد إلكتروني غير صالح');
+  const u = await db.queryOne('SELECT email_otp, email_otp_exp FROM users WHERE id=?', [req.user.id]);
+  if (!u || !u.email_otp) return bad(res, 'اطلب رمز التحقّق أولًا');
+  if (Number(u.email_otp_exp) < now()) return bad(res, 'انتهت صلاحية الرمز — اطلب رمزًا جديدًا');
+  if (String(u.email_otp) !== code) return bad(res, 'الرمز غير صحيح');
+  await db.execute("UPDATE users SET email=?, email_verified=1, email_otp='', email_otp_exp=NULL WHERE id=?", [email, req.user.id]);
+  const fresh = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
+  res.json({ user: await publicUser(fresh) });
 });
 
 // ============ رفع صورة (Base64 → ملف على التخزين الدائم) ============
@@ -159,6 +193,19 @@ r.post('/me/verify-request', async (req, res) => {
   await addNotif(req.user.id, 'clock', 'amber', 'طلب التوثيق قيد المراجعة', 'سنراجع بياناتك ونعلمك بالنتيجة قريبًا');
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u), verifyStatus: 'submitted' });
+});
+
+// السائق يحفظ/يحدّث تواريخ انتهاء وثائقه (رخصة/استمارة/تأمين) — YYYY-MM-DD
+r.post('/me/doc-expiry', async (req, res) => {
+  const { license, vehicleReg, insurance } = req.body || {};
+  const clean = (v) => { const s = String(v || '').trim(); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : (s === '' ? '' : null); };
+  const L = clean(license), V = clean(vehicleReg), I = clean(insurance);
+  if (L === null || V === null || I === null) return bad(res, 'صيغة التاريخ يجب أن تكون YYYY-MM-DD');
+  await db.execute(
+    "UPDATE users SET license_expiry=?, vehicle_reg_expiry=?, insurance_expiry=?, doc_expiry_notified='' WHERE id=?",
+    [L, V, I, req.user.id]);
+  const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
+  res.json({ user: await publicUser(u) });
 });
 
 // حفظ توكن الإشعارات الفورية للجهاز
@@ -884,7 +931,7 @@ r.post('/bookings/:id/rate', async (req, res) => {
     [driverId, req.user.id, b.id, stars, tags, comment, now()]);
   res.json({ ok: true });
 });
-// السائق يقيّم راكبًا (عبر طلب الحجز)
+// السائق يقيّم راكبًا (عبر طلب الحجز) — مع وسوم وتعليق
 r.post('/requests/:id/rate', async (req, res) => {
   const q = await db.queryOne('SELECT r.*, t.driver_id FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [Number(req.params.id)]);
   if (!q) return bad(res, 'الطلب غير موجود', 404);
@@ -893,6 +940,13 @@ r.post('/requests/:id/rate', async (req, res) => {
   if (!q.passenger_id) return bad(res, 'لا يمكن تقييم هذا الراكب');
   await applyRating(q.passenger_id, req.body?.stars);
   await db.execute('UPDATE requests SET rated=1 WHERE id=?', [q.id]);
+  // خزّن المراجعة (وسوم + تعليق) — الهدف الراكب، المُقيِّم السائق
+  const stars = Math.max(1, Math.min(5, Math.round(Number(req.body?.stars) || 0)));
+  const tags = Array.isArray(req.body?.tags) ? JSON.stringify(req.body.tags.slice(0, 8)) : null;
+  const comment = req.body?.comment ? String(req.body.comment).slice(0, 400) : null;
+  if (stars) await insertReturningId('reviews',
+    ['target_id','reviewer_id','booking_id','stars','tags','comment','created_at'],
+    [q.passenger_id, req.user.id, null, stars, tags, comment, now()]);
   res.json({ ok: true });
 });
 

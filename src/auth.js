@@ -91,12 +91,19 @@ async function publicUser(u) {
   const v = await db.queryOne('SELECT make,model,year,color,plate,capacity FROM vehicles WHERE user_id=?', [u.id]) || {};
   return {
     id: u.id, phone: u.phone, dial: u.dial, countryCode: u.country_code,
-    role: u.role, gender: u.gender, name: u.name, email: u.email, rating: u.rating,
+    role: u.role, gender: u.gender, name: u.name, email: u.email,
+    emailVerified: db.kind === 'postgres' ? !!u.email_verified : !!Number(u.email_verified),
+    rating: u.rating,
     ratingCount: Number(u.rating_count) || 0, serviceType: u.service_type || 'carpool',
     avatar: u.avatar || '',
     wallet: u.wallet, earnings: u.earnings, vehicle: v,
     verified: db.kind === 'postgres' ? !!u.verified : !!Number(u.verified),
     verifyStatus: u.verify_status || 'none',
+    docExpiry: {
+      license: u.license_expiry || '',
+      vehicleReg: u.vehicle_reg_expiry || '',
+      insurance: u.insurance_expiry || '',
+    },
   };
 }
 

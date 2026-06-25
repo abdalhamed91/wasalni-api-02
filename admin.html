@@ -524,12 +524,13 @@ const tripTag={scheduled:['t-blue','مجدولة'],live:['t-am','جارية'],co
 async function renderTrips(c){
   const {trips}=await apiGet('/trips');
   if(!trips.length){ c.innerHTML='<div class="empty">لا توجد رحلات منشورة بعد.</div>'; return; }
+  window._trips=trips;
   c.innerHTML = filterControls('tblTrips',{placeholder:'بحث بالسائق أو المسار…',exportKind:'trips',
     filters:[{col:1,label:'الدولة',options:countryFilterOptions()},
              {col:7,label:'الحالة',options:[{v:'مجدولة',t:'مجدولة'},{v:'جارية',t:'جارية'},{v:'مكتملة',t:'مكتملة'},{v:'ملغاة',t:'ملغاة'}]}]})
     + `<div class="card" style="padding:0;overflow:hidden"><table id="tblTrips">
     <thead><tr><th>السائق</th><th>الدولة/المدينة</th><th>المسار</th><th>الوقت</th><th>السعر/مقعد</th><th>المقاعد</th><th>الطلبات</th><th>الحالة</th></tr></thead>
-    <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr>
+    <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr style="cursor:pointer" onclick="openTripDetail('${t.id}')">
       <td>${esc(t.driver_name)}</td>
       <td>${esc(CC_NAMES[t.country_code]||t.country_code||'—')}${t.city?' <span class="muted" style="font-size:11px">'+esc(t.city)+'</span>':''}</td>
       <td>${esc(t.from_label)} ← ${esc(t.to_label)}</td>
@@ -544,12 +545,13 @@ const bkTag={pending_driver:['t-am','بانتظار موافقة'],confirmed:['t
 async function renderBookings(c){
   const {bookings}=await apiGet('/bookings');
   if(!bookings.length){ c.innerHTML='<div class="empty">لا توجد حجوزات بعد.</div>'; return; }
+  window._bookings=bookings;
   c.innerHTML = filterControls('tblBookings',{placeholder:'بحث بالراكب أو السائق…',exportKind:'bookings',
     filters:[{col:1,label:'الدولة',options:countryFilterOptions()},
              {col:6,label:'الحالة',options:[{v:'بانتظار',t:'بانتظار موافقة'},{v:'مؤكّد',t:'مؤكّد'},{v:'جارية',t:'جارية'},{v:'مكتملة',t:'مكتملة'},{v:'ملغاة',t:'ملغاة'}]}]})
     + `<div class="card" style="padding:0;overflow:hidden"><table id="tblBookings">
     <thead><tr><th>الراكب</th><th>الدولة/المدينة</th><th>السائق</th><th>المسار</th><th>المقاعد</th><th>الأجرة</th><th>الحالة</th></tr></thead>
-    <tbody>${bookings.map(b=>{const tg=bkTag[b.status]||['t-gray',b.status];return `<tr>
+    <tbody>${bookings.map(b=>{const tg=bkTag[b.status]||['t-gray',b.status];return `<tr style="cursor:pointer" onclick="openBookingDetail('${b.id}')">
       <td><span class="avatar">${esc(initials(b.passenger_name))}</span> ${esc(b.passenger_name)}</td>
       <td>${esc(CC_NAMES[b.country_code]||b.country_code||'—')}${b.city?' <span class="muted" style="font-size:11px">'+esc(b.city)+'</span>':''}</td>
       <td>${esc(b.driver)}</td>
@@ -557,6 +559,51 @@ async function renderBookings(c){
       <td class="num">${fmt(b.seats)}</td>
       <td class="num">${CUR[b.country_code]||''} ${fmt(b.fare)}</td>
       <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
+}
+// فتح تفاصيل رحلة كاملةً
+function openTripDetail(id){
+  const t=(window._trips||[]).find(x=>String(x.id)===String(id)); if(!t) return;
+  const r=(l,v)=>(v===undefined||v===null||v==='')?'':`<div class="detail-row"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
+  const tg=tripTag[t.status]||['t-gray',t.status];
+  const cur=CUR[t.country_code]||'';
+  const html=
+    r('السائق',esc(t.driver_name))+
+    r('الدولة',esc(CC_NAMES[t.country_code]||t.country_code||'—'))+
+    r('المدينة',esc(t.city||'—'))+
+    r('من',esc(t.from_label))+
+    r('إلى',esc(t.to_label))+
+    r('إحداثيات الانطلاق',t.from_lat!=null?`${(+t.from_lat).toFixed(4)}, ${(+t.from_lng).toFixed(4)}`:'')+
+    r('إحداثيات الوجهة',t.to_lat!=null?`${(+t.to_lat).toFixed(4)}, ${(+t.to_lng).toFixed(4)}`:'')+
+    r('التاريخ/الوقت',esc((t.date&&t.date!=='اليوم'?t.date+' · ':'')+(t.time||'')))+
+    r('السعر لكل مقعد',`${cur} ${fmt(t.price_per_seat)}`)+
+    r('المقاعد',`${fmt(t.accepted_count)}/${fmt(t.total_seats)}`)+
+    r('عدد الطلبات',fmt(t.req_count))+
+    r('نوع الخدمة',esc(t.kind||'city'))+
+    r('تفضيل الجنس',esc(t.gender_pref==='female'?'إناث فقط':'الكل'))+
+    r('الحالة',`<span class="tag ${tg[0]}">${tg[1]}</span>`)+
+    r('رقم الرحلة','#'+esc(t.id));
+  openModal('تفاصيل الرحلة',html);
+}
+// فتح تفاصيل حجز كاملةً
+function openBookingDetail(id){
+  const b=(window._bookings||[]).find(x=>String(x.id)===String(id)); if(!b) return;
+  const r=(l,v)=>(v===undefined||v===null||v==='')?'':`<div class="detail-row"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
+  const tg=bkTag[b.status]||['t-gray',b.status];
+  const cur=CUR[b.country_code]||'';
+  const html=
+    r('الراكب',esc(b.passenger_name))+
+    r('الدولة',esc(CC_NAMES[b.country_code]||b.country_code||'—'))+
+    r('المدينة',esc(b.city||'—'))+
+    r('السائق',esc(b.driver))+
+    r('المركبة',esc([b.car,b.plate].filter(Boolean).join(' · ')||'—'))+
+    r('من',esc(b.from_label))+
+    r('إلى',esc(b.to_label))+
+    r('الوقت',esc(b.time||'—'))+
+    r('المقاعد',fmt(b.seats))+
+    r('الأجرة',`${cur} ${fmt(b.fare)}`)+
+    r('الحالة',`<span class="tag ${tg[0]}">${tg[1]}</span>`)+
+    r('رقم الحجز','#'+esc(b.id));
+  openModal('تفاصيل الحجز',html);
 }
 
 async function renderFinance(c){
@@ -651,6 +698,15 @@ async function renderSettings(c){
       </div>
       <button class="btn btn-pri" onclick="saveAppSettings()">حفظ الإعدادات العامة</button>
       <div id="asMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:14px">🚗 رسالة ترحيب السائق (شاشة «ابدأ كسائق»)</h3>
+      <p class="muted" style="font-size:12.5px;margin-bottom:12px">تظهر للسائق عند بدء التسجيل — عدّلها كيفما تشاء.</p>
+      <div class="field"><label>العنوان</label><input id="as_dwTitle" value="${g('driverWelcomeTitle','ابدأ كسائق مع وصلني')}"></div>
+      <div class="field"><label>الرسالة</label><textarea id="as_dwMsg" rows="2" style="width:100%;resize:vertical">${g('driverWelcomeMsg','حوّل رحلتك اليومية إلى فرصة لتعويض تكلفتها.')}</textarea></div>
+      <button class="btn btn-pri" onclick="saveDriverWelcome()">حفظ رسالة الترحيب</button>
+      <div id="dwMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
     </div>
 
     <div class="card">
@@ -756,6 +812,11 @@ async function saveAppSettings(){
   const b={appName:$('#as_appName').value,supportEmail:$('#as_supportEmail').value,supportPhone:$('#as_supportPhone').value,minFare:$('#as_minFare').value,maxSeats:$('#as_maxSeats').value};
   try{ await apiSend('/app-settings','PATCH',b); $('#asMsg').textContent='✓ حُفظت الإعدادات العامة'; $('#asMsg').style.color='var(--green)'; }
   catch(e){ $('#asMsg').textContent=e.message; $('#asMsg').style.color='var(--red)'; }
+}
+async function saveDriverWelcome(){
+  const b={driverWelcomeTitle:$('#as_dwTitle').value,driverWelcomeMsg:$('#as_dwMsg').value};
+  try{ await apiSend('/app-settings','PATCH',b); $('#dwMsg').textContent='✓ حُفظت رسالة الترحيب'; $('#dwMsg').style.color='var(--green)'; toast('✓ حُفظت رسالة الترحيب'); }
+  catch(e){ $('#dwMsg').textContent=e.message; $('#dwMsg').style.color='var(--red)'; }
 }
 async function saveToggles(){
   const b={maintenance:$('#as_maintenance').checked?'1':'0',allowDrivers:$('#as_allowDrivers').checked?'1':'0',showPromos:$('#as_showPromos').checked?'1':'0'};
