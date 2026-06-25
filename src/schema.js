@@ -311,6 +311,11 @@ async function runMigrations() {
   await ensureColumn('users', 'email_verified', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
   await ensureColumn('users', 'email_otp', "TEXT DEFAULT ''");
   await ensureColumn('users', 'email_otp_exp', PG ? 'BIGINT' : 'INTEGER');
+  // ربط محادثة الراكب بالسائق (الطرف الآخر) لتمرير الرسائل بين الجهتين
+  await ensureColumn('threads', 'peer_id', PG ? 'BIGINT' : 'INTEGER');
+  // مفاوضة سعر طلب التوصيلة
+  await ensureColumn('ride_requests', 'offered_fare', 'REAL');
+  await ensureColumn('ride_requests', 'offer_by', "TEXT DEFAULT ''");
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

@@ -692,9 +692,9 @@ r.post('/ride-requests', async (req, res) => {
   const u = await db.queryOne('SELECT name, wallet, country_code FROM users WHERE id=?', [req.user.id]);
   const km = haversineKm(A, B);
   const seatPrice = await seatPriceForDistance(u.country_code || 'JO', km);
-  const fare = round2(seatPrice * s);
-  if (Number(u.wallet) < fare) return bad(res, `الرصيد غير كافٍ — الأجرة التقديرية ${fare} ${await userCur(req.user.id)}. اشحن محفظتك`);
-  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status='open'", [req.user.id]); // طلب نشط واحد
+  const fare = round2(seatPrice * s);   // سعر تقديري فقط — السعر النهائي يُتّفق عليه مع السائق
+  // طلب نشط واحد: ألغِ أي طلب قيد التفاوض سابق
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status IN ('open','offered','countered')", [req.user.id]);
   const id = await insertReturningId('ride_requests',
     ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','ride_time','status','created_at'],
     [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, rideTime, 'open', now()]);
@@ -713,15 +713,19 @@ r.post('/ride-requests', async (req, res) => {
 });
 
 r.get('/ride-requests/mine', async (req, res) => {
-  const rows = await db.query('SELECT * FROM ride_requests WHERE passenger_id=? ORDER BY created_at DESC LIMIT 5', [req.user.id]);
+  const rows = await db.query(
+    `SELECT rr.*, d.name driver_name FROM ride_requests rr
+     LEFT JOIN users d ON d.id=rr.driver_id
+     WHERE rr.passenger_id=? ORDER BY rr.created_at DESC LIMIT 5`, [req.user.id]);
   res.json({ requests: rows });
 });
 
 r.post('/ride-requests/:id/cancel', async (req, res) => {
   const r0 = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
   if (!r0 || r0.passenger_id !== req.user.id) return bad(res, 'الطلب غير موجود', 404);
-  if (r0.status !== 'open') return bad(res, 'لا يمكن إلغاء هذا الطلب');
+  if (!['open', 'offered', 'countered'].includes(r0.status)) return bad(res, 'لا يمكن إلغاء هذا الطلب');
   await db.execute("UPDATE ride_requests SET status='cancelled' WHERE id=?", [r0.id]);
+  if (r0.driver_id) await addNotif(r0.driver_id, 'x', 'red', 'ألغى الراكب طلب التوصيلة', `${r0.from_label} ← ${r0.to_label}`, '/(driver)/driderequests');
   res.json({ ok: true });
 });
 
@@ -732,7 +736,11 @@ r.get('/driver/ride-requests', async (req, res) => {
   // radiusKm اختياري: عند تمريره نقصر النتائج على الدائرة، وإلا نعرض كل الطلبات مرتّبةً حسب القرب
   const radiusKm = num(req.query.radiusKm);
   const country = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code;
-  let rows = await db.query("SELECT * FROM ride_requests WHERE status='open' AND passenger_id != ? ORDER BY created_at DESC LIMIT 100", [req.user.id]);
+  // طلبات مفتوحة متاحة للعرض + مفاوضاتي النشطة (عرضتُ عليها أو قابلني الراكب بسعر)
+  let rows = await db.query(
+    `SELECT rr.*, p.name passenger_name2 FROM ride_requests rr LEFT JOIN users p ON p.id=rr.passenger_id
+     WHERE (rr.status='open' AND rr.passenger_id != ?) OR (rr.driver_id=? AND rr.status IN ('offered','countered'))
+     ORDER BY rr.created_at DESC LIMIT 100`, [req.user.id, req.user.id]);
   if (country) rows = rows.filter(r => !r.country_code || r.country_code === country);
   if (lat != null && lng != null) {
     rows = rows.map(r => ({ r, d: haversineKm([lat, lng], [r.from_lat, r.from_lng]) }))
@@ -743,21 +751,17 @@ r.get('/driver/ride-requests', async (req, res) => {
   res.json({ requests: rows });
 });
 
-// السائق يقبل طلب توصيلة → ينشئ رحلة + حجزًا مؤكّدًا ويخصم الأجرة ذرّيًّا
-r.post('/ride-requests/:id/accept', async (req, res) => {
-  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
-  if (!rr) return bad(res, 'الطلب غير موجود', 404);
-  if (rr.status !== 'open') return bad(res, 'هذا الطلب لم يعد متاحًا');
-  if (rr.passenger_id === req.user.id) return bad(res, 'لا يمكنك قبول طلبك');
-  const fare = round2(rr.fare);
+// يُتمّ الاتفاق: يخصم الأجرة المتّفق عليها، وينشئ رحلة + حجزًا مؤكّدًا (ذرّيًّا)
+async function finalizeRideRequest(rr, driverId, finalFare) {
+  const fare = round2(finalFare);
   const pay = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, rr.passenger_id, fare]);
-  if (!pay.rowCount) return bad(res, 'رصيد الراكب لم يعد كافيًا لإتمام الطلب');
-  const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
-  const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [req.user.id]) || {};
+  if (!pay.rowCount) return { error: 'رصيد الراكب غير كافٍ لإتمام الطلب' };
+  const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [driverId]);
+  const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [driverId]) || {};
   const tTime = rr.ride_time || 'الآن';
   const tripId = await insertReturningId('trips',
     ['driver_id','from_label','to_label','from_lat','from_lng','to_lat','to_lng','date','time','price_per_seat','total_seats','gender_pref','kind','status','created_at'],
-    [req.user.id, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', tTime, round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
+    [driverId, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', tTime, round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
   const reqId = await insertReturningId('requests',
     ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status'],
     [tripId, rr.passenger_id, rr.passenger_name || 'راكب', 5, rr.seats, rr.from_label, rr.from_lat, rr.from_lng, fare, 'accepted']);
@@ -765,11 +769,69 @@ r.post('/ride-requests/:id/accept', async (req, res) => {
   const bookingId = await insertReturningId('bookings',
     ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','status','created_at'],
     [rr.passenger_id, reqId, drv.name || 'سائق', 5, car, veh.plate || '', rr.from_label, rr.to_label, '', rr.seats, fare, 'confirmed', now()]);
-  await db.execute("UPDATE ride_requests SET status='accepted', driver_id=?, trip_id=? WHERE id=?", [req.user.id, tripId, rr.id]);
+  await db.execute("UPDATE ride_requests SET status='accepted', driver_id=?, trip_id=?, fare=? WHERE id=?", [driverId, tripId, fare, rr.id]);
   await addTxn(rr.passenger_id, 'passenger', `توصيلة · ${rr.from_label} ← ${rr.to_label}`, fare, 'out');
-  await addNotif(rr.passenger_id, 'check', 'green', 'سائق قبِل طلبك ✓', `${drv.name || 'سائق'} في طريقه إليك — تابع موقعه`, '/(passenger)/tracking');
-  await addNotif(req.user.id, 'car', 'blue', 'قبلت طلب توصيلة', `${rr.from_label} ← ${rr.to_label}`, '/(driver)/dmytrips');
-  res.status(201).json({ ok: true, tripId, bookingId });
+  await addNotif(rr.passenger_id, 'check', 'green', 'تم الاتفاق على رحلتك ✓', `${drv.name || 'سائق'} في طريقه إليك — تابع موقعه`, '/(passenger)/tracking');
+  await addNotif(driverId, 'car', 'blue', 'تم الاتفاق على توصيلة', `${rr.from_label} ← ${rr.to_label} · ${fare}`, '/(driver)/dmytrips');
+  return { tripId, bookingId, fare };
+}
+
+// السائق يعرض سعرًا على الراكب (أو يعيد العرض بعد سعر مقابل) → status='offered'
+r.post('/ride-requests/:id/offer', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr) return bad(res, 'الطلب غير موجود', 404);
+  if (rr.passenger_id === req.user.id) return bad(res, 'لا يمكنك العرض على طلبك');
+  if (!['open', 'countered'].includes(rr.status)) return bad(res, 'هذا الطلب لم يعد متاحًا');
+  if (rr.status === 'countered' && rr.driver_id && rr.driver_id !== req.user.id) return bad(res, 'الطلب قيد التفاوض مع سائق آخر');
+  const fare = round2(Number(req.body?.fare) || rr.fare);
+  if (!(fare > 0)) return bad(res, 'سعر غير صالح');
+  await db.execute("UPDATE ride_requests SET status='offered', driver_id=?, offered_fare=?, offer_by='driver' WHERE id=?", [req.user.id, fare, rr.id]);
+  const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
+  await addNotif(rr.passenger_id, 'wallet', 'amber', 'عرض سعر لتوصيلتك 🚕', `${drv ? drv.name : 'سائق'} عرض ${fare} — وافق أو اقترح سعرًا`, '/(passenger)/myrequests');
+  res.json({ ok: true, status: 'offered', offeredFare: fare });
+});
+
+// الراكب يقترح سعرًا مقابلًا → status='countered'
+r.post('/ride-requests/:id/counter', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr || rr.passenger_id !== req.user.id) return bad(res, 'الطلب غير موجود', 404);
+  if (rr.status !== 'offered') return bad(res, 'لا يوجد عرض للردّ عليه');
+  const fare = round2(Number(req.body?.fare) || 0);
+  if (!(fare > 0)) return bad(res, 'سعر غير صالح');
+  await db.execute("UPDATE ride_requests SET status='countered', offered_fare=?, offer_by='passenger' WHERE id=?", [fare, rr.id]);
+  if (rr.driver_id) await addNotif(rr.driver_id, 'wallet', 'amber', 'سعر مقابل من الراكب', `اقترح الراكب ${fare} لِـ ${rr.from_label} ← ${rr.to_label} — وافق أو ارفض`, '/(driver)/driderequests');
+  res.json({ ok: true, status: 'countered', offeredFare: fare });
+});
+
+// موافقة نهائية على السعر المعروض حاليًا → يُتمّ الاتفاق
+r.post('/ride-requests/:id/agree', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr) return bad(res, 'الطلب غير موجود', 404);
+  const fare = round2(rr.offered_fare != null ? rr.offered_fare : rr.fare);
+  let driverId = rr.driver_id;
+  if (rr.status === 'offered') {
+    // عرض السائق بانتظار موافقة الراكب
+    if (rr.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  } else if (rr.status === 'countered') {
+    // سعر الراكب المقابل بانتظار موافقة السائق
+    if (rr.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+    driverId = req.user.id;
+  } else return bad(res, 'لا يوجد عرض ساري للموافقة');
+  if (!driverId) return bad(res, 'تعذّر تحديد السائق');
+  const r2 = await finalizeRideRequest(rr, driverId, fare);
+  if (r2.error) return bad(res, r2.error);
+  res.status(201).json({ ok: true, ...r2 });
+});
+
+// رفض السعر المقابل (من السائق) → يُلغى الطلب
+r.post('/ride-requests/:id/decline', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr) return bad(res, 'الطلب غير موجود', 404);
+  if (rr.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  if (!['offered', 'countered'].includes(rr.status)) return bad(res, 'لا شيء لرفضه');
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE id=?", [rr.id]);
+  await addNotif(rr.passenger_id, 'x', 'red', 'اعتذر السائق عن طلبك', `${rr.from_label} ← ${rr.to_label} — يمكنك نشر طلب جديد`, '/(passenger)/requestride');
+  res.json({ ok: true, status: 'cancelled' });
 });
 
 // ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية) =====
@@ -957,6 +1019,40 @@ r.get('/threads', async (req, res) => {
   res.json({ threads });
 });
 
+// يجد محادثة المالك مع الطرف الآخر أو يُنشئها
+async function getOrCreateThread(ownerId, peerId, peerName) {
+  let th = await db.queryOne('SELECT * FROM threads WHERE user_id=? AND peer_id=?', [ownerId, peerId]);
+  if (th) return th;
+  const initial = (String(peerName || '؟').trim()[0]) || '؟';
+  const id = await insertReturningId('threads', ['user_id', 'peer_name', 'initial', 'peer_id'], [ownerId, peerName || 'مستخدم', initial, peerId]);
+  return await db.queryOne('SELECT * FROM threads WHERE id=?', [id]);
+}
+
+// يفتح محادثة بين الراكب والسائق عبر حجز (bookingId) أو طلب (requestId) — ويجهّز محادثة الطرفين
+r.post('/threads/open', async (req, res) => {
+  const { bookingId, requestId } = req.body || {};
+  let passengerId = null, driverId = null;
+  if (bookingId) {
+    const b = await db.queryOne('SELECT * FROM bookings WHERE id=?', [Number(bookingId)]);
+    if (!b) return bad(res, 'الحجز غير موجود', 404);
+    passengerId = b.passenger_id;
+    if (b.request_id) { const rq = await db.queryOne('SELECT t.driver_id FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [b.request_id]); driverId = rq && rq.driver_id; }
+  } else if (requestId) {
+    const rq = await db.queryOne('SELECT r.passenger_id, t.driver_id FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [Number(requestId)]);
+    if (!rq) return bad(res, 'الطلب غير موجود', 404);
+    passengerId = rq.passenger_id; driverId = rq.driver_id;
+  } else return bad(res, 'بيانات غير كافية لفتح المحادثة');
+  if (!passengerId || !driverId) return bad(res, 'تعذّر تحديد طرفَي المحادثة');
+  if (req.user.id !== passengerId && req.user.id !== driverId) return bad(res, 'غير مصرّح', 403);
+  const peerId = req.user.id === passengerId ? driverId : passengerId;
+  const me = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
+  const peer = await db.queryOne('SELECT name FROM users WHERE id=?', [peerId]);
+  const mineThread = await getOrCreateThread(req.user.id, peerId, peer ? peer.name : 'مستخدم');
+  await getOrCreateThread(peerId, req.user.id, me ? me.name : 'مستخدم'); // جهّز محادثة الطرف الآخر مسبقًا
+  const messages = await db.query('SELECT id,text,mine,created_at at FROM messages WHERE thread_id=? ORDER BY created_at ASC', [mineThread.id]);
+  res.status(201).json({ thread: { ...mineThread, messages } });
+});
+
 r.post('/threads/:id/messages', async (req, res) => {
   const t = await db.queryOne('SELECT * FROM threads WHERE id=?', [Number(req.params.id)]);
   if (!t) return bad(res, 'المحادثة غير موجودة', 404);
@@ -964,6 +1060,15 @@ r.post('/threads/:id/messages', async (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text || text.length > 1000) return bad(res, 'نص الرسالة غير صالح');
   await db.execute('INSERT INTO messages (thread_id,text,mine,created_at) VALUES (?,?,1,?)', [t.id, text, now()]);
+  // مرّر الرسالة لمحادثة الطرف الآخر (mine=0) مع إشعار فوري — لمحادثات الراكب↔السائق
+  if (t.peer_id) {
+    const me = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
+    const peer = await db.queryOne('SELECT role FROM users WHERE id=?', [t.peer_id]);
+    const peerThread = await getOrCreateThread(t.peer_id, req.user.id, me ? me.name : 'مستخدم');
+    await db.execute('INSERT INTO messages (thread_id,text,mine,created_at) VALUES (?,?,0,?)', [peerThread.id, text, now()]);
+    const route = peer && peer.role === 'driver' ? '/(driver)/dchat' : '/(passenger)/messages';
+    await addNotif(t.peer_id, 'messages', 'blue', `رسالة من ${me ? me.name : 'مستخدم'}`, text.slice(0, 80), route);
+  }
   const messages = await db.query('SELECT id,text,mine,created_at at FROM messages WHERE thread_id=? ORDER BY created_at ASC', [t.id]);
   res.status(201).json({ messages });
 });
