@@ -72,8 +72,8 @@ app.use((_req, res) => res.status(404).json({ error: 'المسار غير موج
 
 // معالج أخطاء موحّد
 app.use((err, _req, res, _next) => {
-  console.error('خطأ غير متوقع:', err.message);
-  res.status(500).json({ error: 'خطأ داخلي في الخادم' });
+  console.error('خطأ غير متوقع:', (err && err.stack) || err);
+  res.status(500).json({ error: 'خطأ داخلي في الخادم', detail: String((err && err.message) || err).slice(0, 300) });
 });
 
 const PORT = process.env.PORT || 4000;
