@@ -637,10 +637,11 @@ r.get('/rides/search', async (req, res) => {
 // ============ خدمة «اطلب توصيلة» (الراكب يبثّ طلبه، السائق القريب يقبله) ============
 // الراكب ينشئ طلب توصيلة (من ← إلى) — تُحسب الأجرة التقديرية بالمسافة وتُتحقّق المحفظة
 r.post('/ride-requests', async (req, res) => {
-  const { fromLabel, fromCoord, toLabel, toCoord, seats, note } = req.body || {};
+  const { fromLabel, fromCoord, toLabel, toCoord, seats, note, time } = req.body || {};
   const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
   if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة على الخريطة');
   const s = Math.max(1, Math.min(6, parseInt(seats, 10) || 1));
+  const rideTime = (time && String(time).trim()) ? String(time).trim().slice(0, 20) : 'الآن';
   const u = await db.queryOne('SELECT name, wallet, country_code FROM users WHERE id=?', [req.user.id]);
   const km = haversineKm(A, B);
   const seatPrice = await seatPriceForDistance(u.country_code || 'JO', km);
@@ -648,8 +649,8 @@ r.post('/ride-requests', async (req, res) => {
   if (Number(u.wallet) < fare) return bad(res, `الرصيد غير كافٍ — الأجرة التقديرية ${fare} ${await userCur(req.user.id)}. اشحن محفظتك`);
   await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status='open'", [req.user.id]); // طلب نشط واحد
   const id = await insertReturningId('ride_requests',
-    ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','status','created_at'],
-    [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, 'open', now()]);
+    ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','ride_time','status','created_at'],
+    [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, rideTime, 'open', now()]);
   res.status(201).json({ request: await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [id]), fare });
 });
 
@@ -693,9 +694,10 @@ r.post('/ride-requests/:id/accept', async (req, res) => {
   if (!pay.rowCount) return bad(res, 'رصيد الراكب لم يعد كافيًا لإتمام الطلب');
   const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
   const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [req.user.id]) || {};
+  const tTime = rr.ride_time || 'الآن';
   const tripId = await insertReturningId('trips',
     ['driver_id','from_label','to_label','from_lat','from_lng','to_lat','to_lng','date','time','price_per_seat','total_seats','gender_pref','kind','status','created_at'],
-    [req.user.id, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', '', round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
+    [req.user.id, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', tTime, round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
   const reqId = await insertReturningId('requests',
     ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status'],
     [tripId, rr.passenger_id, rr.passenger_name || 'راكب', 5, rr.seats, rr.from_label, rr.from_lat, rr.from_lng, fare, 'accepted']);
