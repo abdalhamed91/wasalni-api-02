@@ -58,6 +58,9 @@ app.get('/health', (_req, res) => res.json({ ok: true, service: 'wasalni-api', t
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 // تطبيق الويب (للمستخدمين) — مربوط تلقائيًّا بهذا الخادم
 app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'webapp.html')));
+// سياسة الخصوصية والشروط (روابط عامة مطلوبة لمتجر Google Play)
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
+app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
 
 // تحديد معدّل على النقاط الحسّاسة (مكافحة إساءة الاستخدام وتخمين كلمات المرور)
 app.use('/api/auth/otp/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
