@@ -651,6 +651,17 @@ r.post('/ride-requests', async (req, res) => {
   const id = await insertReturningId('ride_requests',
     ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','ride_time','status','created_at'],
     [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, rideTime, 'open', now()]);
+  // إعلام السائقين الموثّقين في نفس البلد بطلب جديد (إشعار داخلي + دفع للجهاز)
+  try {
+    const cc = u.country_code || 'JO';
+    const drivers = await db.query(
+      "SELECT id FROM users WHERE role='driver' AND verified=1 AND id != ? AND (country_code=? OR country_code IS NULL) LIMIT 200",
+      [req.user.id, cc]);
+    for (const d of drivers) {
+      await addNotif(d.id, 'pin', 'amber', 'طلب توصيلة جديد قربك 🚕',
+        `${String(fromLabel || 'موقع')} ← ${String(toLabel || 'الوجهة')} · ${rideTime}`, '/(driver)/driderequests');
+    }
+  } catch (e) { /* لا يوقف نشر الطلب */ }
   res.status(201).json({ request: await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [id]), fare });
 });
 
@@ -667,18 +678,20 @@ r.post('/ride-requests/:id/cancel', async (req, res) => {
   res.json({ ok: true });
 });
 
-// للسائق: طلبات الركّاب المفتوحة القريبة من موقعه (دائرة نصف قطر radiusKm)
+// للسائق: طلبات الركّاب المفتوحة (كلّ الطلبات في بلده، مرتّبة حسب القرب من موقعه)
 r.get('/driver/ride-requests', async (req, res) => {
   const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
   const lat = num(req.query.lat), lng = num(req.query.lng);
-  const radiusKm = Math.min(30, Math.max(2, num(req.query.radiusKm) || 10));
+  // radiusKm اختياري: عند تمريره نقصر النتائج على الدائرة، وإلا نعرض كل الطلبات مرتّبةً حسب القرب
+  const radiusKm = num(req.query.radiusKm);
   const country = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code;
   let rows = await db.query("SELECT * FROM ride_requests WHERE status='open' AND passenger_id != ? ORDER BY created_at DESC LIMIT 100", [req.user.id]);
   if (country) rows = rows.filter(r => !r.country_code || r.country_code === country);
   if (lat != null && lng != null) {
     rows = rows.map(r => ({ r, d: haversineKm([lat, lng], [r.from_lat, r.from_lng]) }))
-      .filter(x => Number.isFinite(x.d) && x.d <= radiusKm).sort((a, b) => a.d - b.d)
-      .map(x => ({ ...x.r, distanceKm: Math.round(x.d * 10) / 10 }));
+      .filter(x => radiusKm == null || (Number.isFinite(x.d) && x.d <= radiusKm))
+      .sort((a, b) => (a.d ?? 1e9) - (b.d ?? 1e9))
+      .map(x => ({ ...x.r, distanceKm: Number.isFinite(x.d) ? Math.round(x.d * 10) / 10 : null }));
   }
   res.json({ requests: rows });
 });
