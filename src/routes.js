@@ -634,6 +634,82 @@ r.get('/rides/search', async (req, res) => {
   res.json({ rides });
 });
 
+// ============ خدمة «اطلب توصيلة» (الراكب يبثّ طلبه، السائق القريب يقبله) ============
+// الراكب ينشئ طلب توصيلة (من ← إلى) — تُحسب الأجرة التقديرية بالمسافة وتُتحقّق المحفظة
+r.post('/ride-requests', async (req, res) => {
+  const { fromLabel, fromCoord, toLabel, toCoord, seats, note } = req.body || {};
+  const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
+  if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة على الخريطة');
+  const s = Math.max(1, Math.min(6, parseInt(seats, 10) || 1));
+  const u = await db.queryOne('SELECT name, wallet, country_code FROM users WHERE id=?', [req.user.id]);
+  const km = haversineKm(A, B);
+  const seatPrice = await seatPriceForDistance(u.country_code || 'JO', km);
+  const fare = round2(seatPrice * s);
+  if (Number(u.wallet) < fare) return bad(res, `الرصيد غير كافٍ — الأجرة التقديرية ${fare} ${await userCur(req.user.id)}. اشحن محفظتك`);
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status='open'", [req.user.id]); // طلب نشط واحد
+  const id = await insertReturningId('ride_requests',
+    ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','status','created_at'],
+    [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, 'open', now()]);
+  res.status(201).json({ request: await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [id]), fare });
+});
+
+r.get('/ride-requests/mine', async (req, res) => {
+  const rows = await db.query('SELECT * FROM ride_requests WHERE passenger_id=? ORDER BY created_at DESC LIMIT 5', [req.user.id]);
+  res.json({ requests: rows });
+});
+
+r.post('/ride-requests/:id/cancel', async (req, res) => {
+  const r0 = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!r0 || r0.passenger_id !== req.user.id) return bad(res, 'الطلب غير موجود', 404);
+  if (r0.status !== 'open') return bad(res, 'لا يمكن إلغاء هذا الطلب');
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE id=?", [r0.id]);
+  res.json({ ok: true });
+});
+
+// للسائق: طلبات الركّاب المفتوحة القريبة من موقعه (دائرة نصف قطر radiusKm)
+r.get('/driver/ride-requests', async (req, res) => {
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const lat = num(req.query.lat), lng = num(req.query.lng);
+  const radiusKm = Math.min(30, Math.max(2, num(req.query.radiusKm) || 10));
+  const country = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code;
+  let rows = await db.query("SELECT * FROM ride_requests WHERE status='open' AND passenger_id != ? ORDER BY created_at DESC LIMIT 100", [req.user.id]);
+  if (country) rows = rows.filter(r => !r.country_code || r.country_code === country);
+  if (lat != null && lng != null) {
+    rows = rows.map(r => ({ r, d: haversineKm([lat, lng], [r.from_lat, r.from_lng]) }))
+      .filter(x => Number.isFinite(x.d) && x.d <= radiusKm).sort((a, b) => a.d - b.d)
+      .map(x => ({ ...x.r, distanceKm: Math.round(x.d * 10) / 10 }));
+  }
+  res.json({ requests: rows });
+});
+
+// السائق يقبل طلب توصيلة → ينشئ رحلة + حجزًا مؤكّدًا ويخصم الأجرة ذرّيًّا
+r.post('/ride-requests/:id/accept', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr) return bad(res, 'الطلب غير موجود', 404);
+  if (rr.status !== 'open') return bad(res, 'هذا الطلب لم يعد متاحًا');
+  if (rr.passenger_id === req.user.id) return bad(res, 'لا يمكنك قبول طلبك');
+  const fare = round2(rr.fare);
+  const pay = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, rr.passenger_id, fare]);
+  if (!pay.rowCount) return bad(res, 'رصيد الراكب لم يعد كافيًا لإتمام الطلب');
+  const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
+  const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [req.user.id]) || {};
+  const tripId = await insertReturningId('trips',
+    ['driver_id','from_label','to_label','from_lat','from_lng','to_lat','to_lng','date','time','price_per_seat','total_seats','gender_pref','kind','status','created_at'],
+    [req.user.id, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', '', round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
+  const reqId = await insertReturningId('requests',
+    ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status'],
+    [tripId, rr.passenger_id, rr.passenger_name || 'راكب', 5, rr.seats, rr.from_label, rr.from_lat, rr.from_lng, fare, 'accepted']);
+  const car = [veh.make, veh.model, veh.color].filter(Boolean).join(' ') || 'مركبة';
+  const bookingId = await insertReturningId('bookings',
+    ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','status','created_at'],
+    [rr.passenger_id, reqId, drv.name || 'سائق', 5, car, veh.plate || '', rr.from_label, rr.to_label, '', rr.seats, fare, 'confirmed', now()]);
+  await db.execute("UPDATE ride_requests SET status='accepted', driver_id=?, trip_id=? WHERE id=?", [req.user.id, tripId, rr.id]);
+  await addTxn(rr.passenger_id, 'passenger', `توصيلة · ${rr.from_label} ← ${rr.to_label}`, fare, 'out');
+  await addNotif(rr.passenger_id, 'check', 'green', 'سائق قبِل طلبك ✓', `${drv.name || 'سائق'} في طريقه إليك — تابع موقعه`, '/(passenger)/tracking');
+  await addNotif(req.user.id, 'car', 'blue', 'قبلت طلب توصيلة', `${rr.from_label} ← ${rr.to_label}`, '/(driver)/dmytrips');
+  res.status(201).json({ ok: true, tripId, bookingId });
+});
+
 // ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية) =====
 r.get('/buses', async (req, res) => {
   const kindParam = (req.query.kind || '').toString();

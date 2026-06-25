@@ -233,6 +233,21 @@ const TABLES = [
     amount REAL NOT NULL DEFAULT 0,
     created_at ${NOW}
   )`,
+  `CREATE TABLE IF NOT EXISTS ride_requests (
+    id ${ID},
+    passenger_id ${INT} NOT NULL,
+    passenger_name TEXT,
+    country_code TEXT,
+    from_label TEXT, from_lat REAL, from_lng REAL,
+    to_label TEXT, to_lat REAL, to_lng REAL,
+    seats ${INT} NOT NULL DEFAULT 1,
+    fare REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    driver_id ${INT},
+    trip_id ${INT},
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
