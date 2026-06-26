@@ -75,6 +75,27 @@ r.post('/auth/otp/verify', async (req, res) => {
   res.json(out);
 });
 
+// تتبّع عام برابط المشاركة (بلا تسجيل دخول) — بيانات محدودة فقط
+r.get('/live/:token', async (req, res) => {
+  const token = String(req.params.token || '');
+  if (!token || token.length < 6) return res.status(404).json({ error: 'رابط غير صالح' });
+  const b = await db.queryOne('SELECT * FROM bookings WHERE share_token=?', [token]);
+  if (!b) return res.status(404).json({ error: 'رابط غير صالح' });
+  let trip = null;
+  if (b.request_id) trip = await db.queryOne('SELECT t.* FROM trips t JOIN requests r ON r.trip_id=t.id WHERE r.id=?', [b.request_id]);
+  const hasLoc = trip && trip.driver_lat != null && trip.driver_lng != null;
+  const firstName = String(b.driver || 'السائق').split(' ')[0];
+  res.json({
+    status: trip ? trip.status : b.status,
+    bookingStatus: b.status,
+    driverName: firstName,
+    from: b.from_label, to: b.to_label,
+    fromCoord: trip ? [trip.from_lat, trip.from_lng] : null,
+    toCoord: trip ? [trip.to_lat, trip.to_lng] : null,
+    driver: hasLoc ? [trip.driver_lat, trip.driver_lng] : null,
+  });
+});
+
 // كل ما يلي محمي
 r.use(authRequired);
 
@@ -490,7 +511,7 @@ r.post('/trips/:id/start', async (req, res) => {
   // نبّه الركّاب المؤكّدين بانطلاق الرحلة قبل تغيير الحالة
   const pax = await db.query("SELECT passenger_id FROM requests WHERE trip_id=? AND status='accepted' AND passenger_id IS NOT NULL", [trip.id]);
   await db.execute("UPDATE requests SET status='onboard' WHERE trip_id=? AND status='accepted'", [trip.id]);
-  await db.execute("UPDATE trips SET status='live' WHERE id=?", [trip.id]);
+  await db.execute("UPDATE trips SET status='live', started_at=? WHERE id=?", [now(), trip.id]);
   for (const p of pax) await addNotif(p.passenger_id, 'car', 'green', 'انطلقت رحلتك 🚗', 'السائق في الطريق — تابع موقعه مباشرة', '/(passenger)/tracking');
   res.json({ ok: true });
 });
@@ -530,6 +551,41 @@ r.get('/bookings/:id/track', async (req, res) => {
   });
 });
 
+// تفاصيل حجز كاملة (لصفحة تفاصيل الرحلة عند الراكب) — إحداثيات حقيقية + توقيتات
+r.get('/bookings/:id/detail', async (req, res) => {
+  const b = await db.queryOne('SELECT * FROM bookings WHERE id=?', [Number(req.params.id)]);
+  if (!b) return bad(res, 'الحجز غير موجود', 404);
+  if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  let trip = null, driver = null;
+  if (b.request_id) {
+    trip = await db.queryOne('SELECT t.* FROM trips t JOIN requests r ON r.trip_id=t.id WHERE r.id=?', [b.request_id]);
+    if (trip) driver = await db.queryOne('SELECT name, rating, rating_count FROM users WHERE id=?', [trip.driver_id]);
+  }
+  res.json({
+    id: b.id, status: b.status, from: b.from_label, to: b.to_label,
+    fromCoord: trip ? [trip.from_lat, trip.from_lng] : null,
+    toCoord: trip ? [trip.to_lat, trip.to_lng] : null,
+    driver: b.driver, driverRating: driver ? driver.rating : b.driver_rating,
+    car: b.car, plate: b.plate, seats: b.seats, fare: b.fare,
+    scheduledTime: b.time, bookedAt: b.created_at,
+    startedAt: trip ? trip.started_at : null,
+    completedAt: trip ? trip.completed_at : null,
+    kind: trip ? trip.kind : 'city',
+  });
+});
+
+// ينشئ/يعيد رابط تتبّع عام لمشاركته مع العائلة
+r.post('/bookings/:id/share', async (req, res) => {
+  const b = await db.queryOne('SELECT * FROM bookings WHERE id=?', [Number(req.params.id)]);
+  if (!b) return bad(res, 'الحجز غير موجود', 404);
+  if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  let token = b.share_token;
+  if (!token) { token = crypto.randomBytes(7).toString('hex'); await db.execute('UPDATE bookings SET share_token=? WHERE id=?', [token, b.id]); }
+  const host = req.get('host');
+  const url = `https://${host}/live/${token}`;
+  res.json({ url, token });
+});
+
 // السائق وصل لنقطة الالتقاط → إشعار للركّاب المؤكّدين
 r.post('/trips/:id/arrived', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
@@ -552,7 +608,7 @@ r.post('/trips/:id/complete', async (req, res) => {
     if (rq.passenger_id) await addNotif(rq.passenger_id, 'star', 'blue', 'وصلت إلى وجهتك ✓', 'قيّم رحلتك مع السائق', '/(passenger)/trips');
   }
   await db.execute("UPDATE requests SET status='dropped' WHERE trip_id=? AND status IN ('onboard','accepted')", [trip.id]);
-  await db.execute("UPDATE trips SET status='completed' WHERE id=?", [trip.id]);
+  await db.execute("UPDATE trips SET status='completed', completed_at=? WHERE id=?", [now(), trip.id]);
   if (net > 0) {
     await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [net, req.user.id]);
     await addTxn(req.user.id, 'driver', 'أرباح رحلة (صافي)', net, 'in');

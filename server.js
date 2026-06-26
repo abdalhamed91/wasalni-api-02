@@ -61,6 +61,8 @@ app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'webapp.html'))
 // سياسة الخصوصية والشروط (روابط عامة مطلوبة لمتجر Google Play)
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
+// صفحة تتبّع عامة عبر رابط المشاركة (تقرأ الرمز من المسار وتستعلم /api/live/:token)
+app.get('/live/:token', (_req, res) => res.sendFile(path.join(__dirname, 'live.html')));
 
 // تحديد معدّل على النقاط الحسّاسة (مكافحة إساءة الاستخدام وتخمين كلمات المرور)
 app.use('/api/auth/otp/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));

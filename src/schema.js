@@ -313,6 +313,11 @@ async function runMigrations() {
   await ensureColumn('users', 'email_otp_exp', PG ? 'BIGINT' : 'INTEGER');
   // ربط محادثة الراكب بالسائق (الطرف الآخر) لتمرير الرسائل بين الجهتين
   await ensureColumn('threads', 'peer_id', PG ? 'BIGINT' : 'INTEGER');
+  // توقيتات انطلاق/وصول الرحلة الفعلية (لصفحة تفاصيل الرحلة)
+  await ensureColumn('trips', 'started_at', PG ? 'BIGINT' : 'INTEGER');
+  await ensureColumn('trips', 'completed_at', PG ? 'BIGINT' : 'INTEGER');
+  // رمز مشاركة رابط تتبّع الرحلة (عام، بلا تسجيل دخول)
+  await ensureColumn('bookings', 'share_token', "TEXT DEFAULT ''");
   // مفاوضة سعر طلب التوصيلة
   await ensureColumn('ride_requests', 'offered_fare', 'REAL');
   await ensureColumn('ride_requests', 'offer_by', "TEXT DEFAULT ''");

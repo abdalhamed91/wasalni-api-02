@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>تتبّع رحلة وصلني</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,'Segoe UI',Tahoma,sans-serif;background:#0F2F72}
+  #map{position:absolute;inset:0 0 92px 0}
+  #bar{position:absolute;left:0;right:0;bottom:0;height:92px;background:#fff;box-shadow:0 -3px 14px rgba(0,0,0,.12);padding:12px 16px;box-sizing:border-box}
+  .brand{display:flex;align-items:center;gap:8px;color:#0F2F72;font-weight:800;font-size:15px}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:#22C55E;animation:p 1.4s infinite}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+  #status{color:#1B2A4A;font-size:13px;margin-top:6px}
+  #route{color:#6B7280;font-size:12px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .car{background:#0F2F72;width:20px;height:20px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.45)}
+</style></head><body>
+<div id="map"></div>
+<div id="bar">
+  <div class="brand"><span class="dot"></span> وصلني — تتبّع مباشر</div>
+  <div id="status">جارٍ تحميل موقع الرحلة…</div>
+  <div id="route"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var map = L.map('map',{zoomControl:true,attributionControl:false}).setView([31.95,35.93],12);
+  L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=ar&x={x}&y={y}&z={z}',{subdomains:['0','1','2','3'],maxZoom:20}).addTo(map);
+  var startM=null,endM=null,car=null,line=null,fitted=false;
+  function setMarkers(f,t){
+    if(f&&!startM){startM=L.circleMarker(f,{radius:8,color:'#fff',weight:3,fillColor:'#1E5BC2',fillOpacity:1}).addTo(map);}
+    if(t&&!endM){endM=L.circleMarker(t,{radius:8,color:'#fff',weight:3,fillColor:'#FF6320',fillOpacity:1}).addTo(map);}
+    if(f&&t&&!line){line=L.polyline([f,t],{color:'#1E5BC2',weight:4,opacity:.85,dashArray:'6,8'}).addTo(map);}
+    if(f&&t&&!fitted){map.fitBounds(L.latLngBounds([f,t]).pad(0.3));fitted=true;}
+  }
+  function moveCar(p){
+    if(!car){car=L.marker(p,{icon:L.divIcon({className:'',html:'<div class=car></div>',iconSize:[20,20]})}).addTo(map);map.setView(p,15);}
+    else{car.setLatLng(p);}
+  }
+  var STATUS={scheduled:'بانتظار انطلاق الرحلة',live:'الرحلة جارية الآن 🚗',completed:'اكتملت الرحلة ✓',cancelled:'أُلغيت الرحلة'};
+  function poll(){
+    fetch('/api/live/'+token).then(function(r){return r.json();}).then(function(d){
+      if(d.error){document.getElementById('status').textContent='الرابط غير صالح أو انتهت الرحلة.';return;}
+      if(d.fromCoord&&d.fromCoord[0]!=null)setMarkers(d.fromCoord,d.toCoord);
+      if(d.driver&&d.driver.length===2)moveCar(d.driver);
+      document.getElementById('status').textContent=(STATUS[d.status]||'تتبّع الرحلة')+' · السائق: '+(d.driverName||'');
+      document.getElementById('route').textContent=(d.from||'')+'  ←  '+(d.to||'');
+    }).catch(function(){});
+  }
+  poll(); setInterval(poll,5000);
+</script></body></html>
