@@ -432,8 +432,11 @@ r.post('/trips/:id/cancel', async (req, res) => {
       const bk = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [rq.id]);
       if (bk) {
         await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [bk.id]);
-        await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
-        await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة ملغاة من السائق', bk.fare, 'in');
+        // استرجاع المحفظة فقط للحجوزات المدفوعة محفظةً (النقدي لم يُخصم أصلًا)
+        if (bk.payment !== 'cash') {
+          await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
+          await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة ملغاة من السائق', bk.fare, 'in');
+        }
       }
       await addNotif(rq.passenger_id, 'x', 'red', 'أُلغيت رحلتك من السائق', `${trip.from_label} ← ${trip.to_label}`, '/(passenger)/wallet');
     }
@@ -492,9 +495,13 @@ async function handleRequestAction(req, res) {
     const booking = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [q.id]);
     if (booking) {
       await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [booking.id]);
-      await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [booking.fare, booking.passenger_id]);
-      await addTxn(booking.passenger_id, 'passenger', 'استرجاع حجز مرفوض', booking.fare, 'in');
-      await addNotif(booking.passenger_id, 'wallet', 'amber', 'اعتذر السائق عن طلبك وأُعيد المبلغ', `${booking.fare} ${await userCur(booking.passenger_id)} إلى محفظتك`, '/(passenger)/wallet');
+      if (booking.payment !== 'cash') {
+        await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [booking.fare, booking.passenger_id]);
+        await addTxn(booking.passenger_id, 'passenger', 'استرجاع حجز مرفوض', booking.fare, 'in');
+        await addNotif(booking.passenger_id, 'wallet', 'amber', 'اعتذر السائق عن طلبك وأُعيد المبلغ', `${booking.fare} ${await userCur(booking.passenger_id)} إلى محفظتك`, '/(passenger)/wallet');
+      } else {
+        await addNotif(booking.passenger_id, 'x', 'red', 'اعتذر السائق عن طلبك', `${q.from_label} ← ${q.to_label}`);
+      }
     } else if (q.passenger_id) {
       await addNotif(q.passenger_id, 'x', 'red', 'لم يُقبل طلب حجزك', `${q.from_label} ← ${q.to_label}`);
     }
@@ -506,14 +513,13 @@ r.post('/requests/:id/reject', async (req, res) => { req.params.action = 'reject
 
 r.post('/trips/:id/start', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
-  const accepted = (await db.queryOne("SELECT COUNT(*) c FROM requests WHERE trip_id=? AND status='accepted'", [trip.id])).c;
-  if (accepted === 0) return bad(res, 'لا يوجد ركّاب مؤكّدون لبدء الرحلة');
-  // نبّه الركّاب المؤكّدين بانطلاق الرحلة قبل تغيير الحالة
+  if (trip.status === 'completed' || trip.status === 'cancelled') return bad(res, 'الرحلة منتهية');
+  // يُسمح ببدء الانطلاق حتى بلا ركّاب — تبقى الرحلة «جارية» وقابلة للحجز على المسار
   const pax = await db.query("SELECT passenger_id FROM requests WHERE trip_id=? AND status='accepted' AND passenger_id IS NOT NULL", [trip.id]);
   await db.execute("UPDATE requests SET status='onboard' WHERE trip_id=? AND status='accepted'", [trip.id]);
   await db.execute("UPDATE trips SET status='live', started_at=? WHERE id=?", [now(), trip.id]);
   for (const p of pax) await addNotif(p.passenger_id, 'car', 'green', 'انطلقت رحلتك 🚗', 'السائق في الطريق — تابع موقعه مباشرة', '/(passenger)/tracking');
-  res.json({ ok: true });
+  res.json({ ok: true, passengers: pax.length });
 });
 
 // السائق يبثّ موقعه اللحظي أثناء الرحلة
@@ -567,6 +573,7 @@ r.get('/bookings/:id/detail', async (req, res) => {
     toCoord: trip ? [trip.to_lat, trip.to_lng] : null,
     driver: b.driver, driverRating: driver ? driver.rating : b.driver_rating,
     car: b.car, plate: b.plate, seats: b.seats, fare: b.fare,
+    payment: b.payment || 'wallet',
     scheduledTime: b.time, bookedAt: b.created_at,
     startedAt: trip ? trip.started_at : null,
     completedAt: trip ? trip.completed_at : null,
@@ -597,7 +604,9 @@ r.post('/trips/:id/arrived', async (req, res) => {
 r.post('/trips/:id/complete', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   if (trip.status !== 'live' && trip.status !== 'scheduled') return bad(res, 'الرحلة ليست جارية');
-  const gross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted')", [trip.id])).s);
+  // التسوية المالية للمحفظة تشمل المدفوع محفظةً فقط — النقدي يُحصّله السائق مباشرةً
+  const gross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment <> 'cash'", [trip.id])).s);
+  const cashCollected = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment = 'cash'", [trip.id])).s);
   const driverCountry = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code || 'SA';
   const commission = await platformProfit(driverCountry, gross);
   const net = round2(gross - commission);
@@ -615,8 +624,10 @@ r.post('/trips/:id/complete', async (req, res) => {
   }
   // سجّل عمولة المنصة الفعلية (حسب دولة السائق) كمعاملة قابلة للتدقيق
   if (commission > 0) await addTxn(req.user.id, 'platform', 'عمولة المنصة', commission, 'in');
+  // سجّل المبلغ النقدي المُحصّل كمعلومة (لا يدخل المحفظة — بيد السائق)
+  if (cashCollected > 0) await addTxn(req.user.id, 'driver', 'تحصيل نقدي (بيد السائق)', cashCollected, 'in');
   const earnings = round2((await db.queryOne('SELECT earnings FROM users WHERE id=?', [req.user.id])).earnings);
-  res.json({ gross, commission, net, earnings });
+  res.json({ gross, commission, net, cashCollected, earnings });
 });
 
 // ============ البلاغات ============
@@ -674,7 +685,7 @@ r.get('/rides/search', async (req, res) => {
      FROM trips t
      JOIN users d ON d.id = t.driver_id
      LEFT JOIN vehicles v ON v.user_id = t.driver_id
-     WHERE t.status = 'scheduled' AND t.total_seats > 0 AND t.driver_id != ?
+     WHERE t.status IN ('scheduled','live') AND t.total_seats > 0 AND t.driver_id != ?
      ORDER BY t.created_at DESC`;
   let trips = await db.query(sql, [req.user.id]);
 
@@ -942,7 +953,7 @@ r.get('/buses/:id/live', async (req, res) => {
 });
 
 r.post('/bookings', async (req, res) => {
-  const { rideId, seats, to, preferences, note, promoCode } = req.body || {};
+  const { rideId, seats, to, preferences, note, promoCode, payment, pickupCoord } = req.body || {};
   const trip = await db.queryOne(
     `SELECT t.*, d.name AS driver_name, d.rating AS driver_rating,
             v.make, v.model, v.color, v.plate
@@ -950,10 +961,20 @@ r.post('/bookings', async (req, res) => {
      LEFT JOIN vehicles v ON v.user_id = t.driver_id
      WHERE t.id = ?`, [Number(rideId)]);
   if (!trip) return bad(res, 'الرحلة غير موجودة', 404);
-  if (trip.status !== 'scheduled') return bad(res, 'هذه الرحلة لم تعد متاحة');
+  if (!['scheduled', 'live'].includes(trip.status)) return bad(res, 'هذه الرحلة لم تعد متاحة');
   if (trip.driver_id === req.user.id) return bad(res, 'لا يمكنك حجز رحلتك');
   const s = Number(seats);
   if (!Number.isInteger(s) || s < 1 || s > trip.total_seats) return bad(res, `المقاعد المتاحة: ${trip.total_seats}`);
+  const cash = payment === 'cash';
+  const P = Array.isArray(pickupCoord) && validPt(pickupCoord) ? pickupCoord : null;
+  // §8: الحجز أثناء رحلة جارية — يُمنع إن تجاوز السائق نقطة الراكب (الأقرب للوجهة)
+  if (trip.status === 'live' && trip.driver_lat != null && trip.driver_lng != null) {
+    const dest = [trip.to_lat, trip.to_lng];
+    const pick = P || [trip.from_lat, trip.from_lng];
+    if (haversineKm([trip.driver_lat, trip.driver_lng], dest) <= haversineKm(pick, dest) + 0.3) {
+      return bad(res, 'السائق تجاوز نقطتك — لم يعد بالإمكان الانضمام لهذه الرحلة');
+    }
+  }
   const baseFare = round2(trip.price_per_seat * s);
   const u = await db.queryOne('SELECT wallet, name, rating, gender, country_code FROM users WHERE id=?', [req.user.id]);
   // تطبيق تفضيل الجنس: رحلة «نساء فقط» تُحجز فقط من راكبة
@@ -975,30 +996,34 @@ r.post('/bookings', async (req, res) => {
     appliedPromo = p;
   }
   const fare = round2(baseFare - discount);
-  if (u.wallet < fare) return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك');
+  if (!cash && u.wallet < fare) return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك أو اختر الدفع نقدًا');
 
   // 1) حجز المقاعد ذرّيًا (يمنع البيع الزائد عند الحجز المتزامن)
   const seatRes = await db.execute(
-    "UPDATE trips SET total_seats = total_seats - ? WHERE id=? AND status='scheduled' AND total_seats >= ?",
+    "UPDATE trips SET total_seats = total_seats - ? WHERE id=? AND status IN ('scheduled','live') AND total_seats >= ?",
     [s, trip.id, s]);
   if (!seatRes.rowCount) return bad(res, `المقاعد المتاحة لم تعد كافية`);
-  // 2) خصم المحفظة ذرّيًا (يمنع الخصم المزدوج/الرصيد السالب) — وإلا أعد المقاعد
-  const payRes = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, req.user.id, fare]);
-  if (!payRes.rowCount) {
-    await db.execute('UPDATE trips SET total_seats = total_seats + ? WHERE id=?', [s, trip.id]);
-    return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك');
+  // 2) الدفع: نقدًا = بلا خصم محفظة (يُحصّل من السائق)؛ محفظة = خصم ذرّي وإلا أعد المقاعد
+  if (!cash) {
+    const payRes = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, req.user.id, fare]);
+    if (!payRes.rowCount) {
+      await db.execute('UPDATE trips SET total_seats = total_seats + ? WHERE id=?', [s, trip.id]);
+      return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك أو اختر الدفع نقدًا');
+    }
+    await addTxn(req.user.id, 'passenger', `رحلة · ${trip.from_label} ← ${trip.to_label}`, fare, 'out');
   }
 
   const car = [trip.make, trip.model, trip.color].filter(Boolean).join(' ') || 'مركبة';
-  await addTxn(req.user.id, 'passenger', `رحلة · ${trip.from_label} ← ${trip.to_label}`, fare, 'out');
+  const pm = cash ? 'cash' : 'wallet';
+  const pickLat = P ? P[0] : trip.from_lat, pickLng = P ? P[1] : trip.from_lng;
   const prefsJson = Array.isArray(preferences) ? JSON.stringify(preferences.slice(0, 12)) : null;
   const paxNote = note ? String(note).slice(0, 300) : null;
   const requestId = await insertReturningId('requests',
-    ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status'],
-    [trip.id, req.user.id, u.name || 'راكب', u.rating || 5, s, trip.from_label, trip.from_lat, trip.from_lng, fare, 'pending']);
+    ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status','payment'],
+    [trip.id, req.user.id, u.name || 'راكب', u.rating || 5, s, trip.from_label, pickLat, pickLng, fare, 'pending', pm]);
   const bookingId = await insertReturningId('bookings',
-    ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','preferences','pax_note','status','created_at'],
-    [req.user.id, requestId, trip.driver_name, trip.driver_rating, car, trip.plate || '', trip.from_label, trip.to_label, trip.time, s, fare, prefsJson, paxNote, 'pending_driver', now()]);
+    ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','preferences','pax_note','status','payment','created_at'],
+    [req.user.id, requestId, trip.driver_name, trip.driver_rating, car, trip.plate || '', trip.from_label, trip.to_label, trip.time, s, fare, prefsJson, paxNote, 'pending_driver', pm, now()]);
   // سجّل استخدام كود الخصم (مرّة واحدة لكل مستخدم)
   if (appliedPromo && discount > 0) {
     await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [appliedPromo.id]);
@@ -1029,9 +1054,12 @@ r.post('/bookings/:id/status', async (req, res) => {
   await db.execute('UPDATE bookings SET status=? WHERE id=?', [status, b.id]);
   let wallet;
   if (status === 'cancelled') {
-    await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [b.fare, req.user.id]);
-    await addTxn(req.user.id, 'passenger', 'استرجاع رحلة ملغاة', b.fare, 'in');
-    await addNotif(req.user.id, 'wallet', 'amber', 'أُلغيت الرحلة وأُعيد المبلغ', `${b.fare} ${await userCur(req.user.id)} إلى محفظتك`);
+    // استرجاع المحفظة فقط للحجوزات المدفوعة محفظةً (النقدي لم يُخصم)
+    if (b.payment !== 'cash') {
+      await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [b.fare, req.user.id]);
+      await addTxn(req.user.id, 'passenger', 'استرجاع رحلة ملغاة', b.fare, 'in');
+      await addNotif(req.user.id, 'wallet', 'amber', 'أُلغيت الرحلة وأُعيد المبلغ', `${b.fare} ${await userCur(req.user.id)} إلى محفظتك`);
+    }
     // أعد المقاعد للرحلة وحدّث الطلب المرتبط وأبلغ السائق
     if (b.request_id) {
       const rq = await db.queryOne('SELECT r.*, t.driver_id, t.from_label, t.to_label FROM requests r JOIN trips t ON t.id=r.trip_id WHERE r.id=?', [b.request_id]);

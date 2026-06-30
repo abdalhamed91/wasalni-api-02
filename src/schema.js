@@ -318,6 +318,9 @@ async function runMigrations() {
   await ensureColumn('trips', 'completed_at', PG ? 'BIGINT' : 'INTEGER');
   // رمز مشاركة رابط تتبّع الرحلة (عام، بلا تسجيل دخول)
   await ensureColumn('bookings', 'share_token', "TEXT DEFAULT ''");
+  // طريقة الدفع: wallet (محفظة) أو cash (نقدًا للسائق)
+  await ensureColumn('bookings', 'payment', "TEXT DEFAULT 'wallet'");
+  await ensureColumn('requests', 'payment', "TEXT DEFAULT 'wallet'");
   // مفاوضة سعر طلب التوصيلة
   await ensureColumn('ride_requests', 'offered_fare', 'REAL');
   await ensureColumn('ride_requests', 'offer_by', "TEXT DEFAULT ''");
