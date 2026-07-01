@@ -132,6 +132,33 @@ async function verifyEmailLoginOtp(email, code) {
   return { token, user: await publicUser(user) };
 }
 
+// ---------- تسجيل الدخول بجوجل (بديل للهاتف — يتطلّب حسابًا موجودًا بنفس البريد) ----------
+// يُفعَّل تلقائيًّا بمجرّد ضبط GOOGLE_CLIENT_ID (Web Client ID) في متغيّرات البيئة.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+async function verifyGoogleLogin(idToken) {
+  if (!GOOGLE_CLIENT_ID) return { error: 'تسجيل الدخول بجوجل غير مُفعّل بعد' };
+  if (!idToken) return { error: 'رمز جوجل مطلوب' };
+  let payload;
+  try {
+    const { OAuth2Client } = require('google-auth-library');
+    const client = new OAuth2Client();
+    const ticket = await client.verifyIdToken({ idToken: String(idToken), audience: GOOGLE_CLIENT_ID });
+    payload = ticket.getPayload();
+  } catch (e) {
+    return { error: 'تعذّر التحقّق من حساب جوجل' };
+  }
+  if (!payload || !payload.email || !payload.email_verified) return { error: 'حساب جوجل غير موثّق البريد' };
+  const email = String(payload.email).toLowerCase();
+  const user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [email]);
+  if (!user) return { error: 'لا يوجد حساب بهذا البريد — سجّل عبر رقم جوالك أولًا ثم أضِف بريدك من الإعدادات' };
+  // بريد جوجل موثّق فعليًّا من جوجل نفسها
+  if (!Number(user.email_verified)) await db.execute('UPDATE users SET email_verified=1 WHERE id=?', [user.id]);
+  await ensureSeedForUser(user.id, user.name);
+  const fresh = await db.queryOne('SELECT * FROM users WHERE id=?', [user.id]);
+  const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
+  return { token, user: await publicUser(fresh) };
+}
+
 async function publicUser(u) {
   const v = await db.queryOne('SELECT make,model,year,color,plate,capacity FROM vehicles WHERE user_id=?', [u.id]) || {};
   return {
@@ -169,4 +196,4 @@ async function authRequired(req, res, next) {
   }
 }
 
-module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp };
+module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin };

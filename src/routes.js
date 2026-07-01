@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const UPLOAD_DIR = path.join(path.dirname(process.env.DB_PATH || path.join(__dirname, '..', 'wasalni.db')), 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const { db, now, round2, insertReturningId, addTxn, addNotif, COMMISSION_RATE, SERVICE_COUNTRIES, commissionRate, serviceCountries, platformProfit, seatPriceForDistance, countrySetting } = require('./db');
-const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp } = require('./auth');
+const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin } = require('./auth');
 const { paymentsEnabled, verifyPayment } = require('./payments');
 
 const r = express.Router();
@@ -89,6 +89,14 @@ r.post('/auth/email/verify', async (req, res) => {
   if (!email || !code) return bad(res, 'البريد والرمز مطلوبان');
   const out = await verifyEmailLoginOtp(String(email), String(code));
   if (out.error) return bad(res, out.error, 401);
+  res.json(out);
+});
+
+// ---- تسجيل الدخول بجوجل (بديل للهاتف — يتطلّب GOOGLE_CLIENT_ID مضبوطًا + حسابًا موجودًا بنفس البريد) ----
+r.post('/auth/google', async (req, res) => {
+  const { idToken } = req.body || {};
+  const out = await verifyGoogleLogin(idToken);
+  if (out.error) return bad(res, out.error, out.error.includes('غير مُفعّل') ? 501 : 401);
   res.json(out);
 });
 
