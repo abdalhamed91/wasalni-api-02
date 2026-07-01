@@ -248,6 +248,15 @@ const TABLES = [
     trip_id ${INT},
     created_at ${NOW}
   )`,
+  // المسارات المحفوظة (للسائق والراكب) — نشر/طلب بضغطة
+  `CREATE TABLE IF NOT EXISTS saved_routes (
+    id ${ID},
+    user_id ${INT} NOT NULL,
+    label TEXT NOT NULL,
+    from_label TEXT, from_lat REAL, from_lng REAL,
+    to_label TEXT, to_lat REAL, to_lng REAL,
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL

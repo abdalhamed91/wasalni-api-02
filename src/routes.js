@@ -766,7 +766,7 @@ r.post('/ride-requests', async (req, res) => {
   const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
   if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة على الخريطة');
   const s = Math.max(1, Math.min(6, parseInt(seats, 10) || 1));
-  const rideTime = (time && String(time).trim()) ? String(time).trim().slice(0, 20) : 'الآن';
+  const rideTime = (time && String(time).trim()) ? String(time).trim().slice(0, 40) : 'الآن';
   const u = await db.queryOne('SELECT name, wallet, country_code FROM users WHERE id=?', [req.user.id]);
   const km = haversineKm(A, B);
   const seatPrice = await seatPriceForDistance(u.country_code || 'JO', km);
@@ -1191,6 +1191,29 @@ r.post('/places', async (req, res) => {
   if (!label) return bad(res, 'اسم المكان مطلوب');
   const placeId = await insertReturningId('places', ['user_id','label','sub','lat','lng'], [req.user.id, label, sub || '', lat ?? null, lng ?? null]);
   res.status(201).json({ place: await db.queryOne('SELECT * FROM places WHERE id=?', [placeId]) });
+});
+
+// ============ المسارات المحفوظة (سائق/راكب) ============
+r.get('/saved-routes', async (req, res) => res.json({ routes: await db.query('SELECT * FROM saved_routes WHERE user_id=? ORDER BY created_at DESC', [req.user.id]) }));
+r.post('/saved-routes', async (req, res) => {
+  const { label, fromLabel, fromCoord, toLabel, toCoord } = req.body || {};
+  const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
+  if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة');
+  const id = await insertReturningId('saved_routes',
+    ['user_id','label','from_label','from_lat','from_lng','to_label','to_lat','to_lng','created_at'],
+    [req.user.id, String(label || 'مسار').slice(0, 60), String(fromLabel || 'من'), A[0], A[1], String(toLabel || 'إلى'), B[0], B[1], now()]);
+  res.status(201).json({ route: await db.queryOne('SELECT * FROM saved_routes WHERE id=?', [id]) });
+});
+r.patch('/saved-routes/:id', async (req, res) => {
+  const r0 = await db.queryOne('SELECT * FROM saved_routes WHERE id=?', [Number(req.params.id)]);
+  if (!r0 || r0.user_id !== req.user.id) return bad(res, 'المسار غير موجود', 404);
+  const { label } = req.body || {};
+  if (label) await db.execute('UPDATE saved_routes SET label=? WHERE id=?', [String(label).slice(0, 60), r0.id]);
+  res.json({ route: await db.queryOne('SELECT * FROM saved_routes WHERE id=?', [r0.id]) });
+});
+r.delete('/saved-routes/:id', async (req, res) => {
+  await db.execute('DELETE FROM saved_routes WHERE id=? AND user_id=?', [Number(req.params.id), req.user.id]);
+  res.json({ ok: true });
 });
 
 // ============ البطاقات ============
