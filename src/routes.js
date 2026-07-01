@@ -421,6 +421,8 @@ r.get('/trips', async (req, res) => {
 });
 
 r.post('/trips', async (req, res) => {
+  // نشر رحلة يتطلّب سائقًا معتمَدًا من الإدارة — يمنع أي حساب (راكب لم يسجّل كسائق) من الظهور كسائق
+  if (req.user.role !== 'driver' || !req.user.verified) return bad(res, 'يجب اعتماد حسابك كسائق أولًا لنشر رحلة', 403);
   const { from, to, fromCoord, toCoord, date, time, price, seats, genderPref } = req.body || {};
   if (!from || !to || !time) return bad(res, 'الانطلاق والوجهة والوقت مطلوبة');
   const KINDS = ['city', 'intercity', 'public_bus', 'school_bus'];
