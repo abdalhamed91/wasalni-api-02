@@ -1216,6 +1216,67 @@ r.delete('/saved-routes/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ============ المجموعات: مسار ثابت جماعي (زملاء/طلاب) — ركّاب وسائقون معًا ============
+r.get('/groups/mine', async (req, res) => {
+  const rows = await db.query(
+    `SELECT g.*, gm.role member_role,
+       (SELECT COUNT(*) FROM group_members WHERE group_id=g.id) member_count
+     FROM group_members gm JOIN groups g ON g.id=gm.group_id
+     WHERE gm.user_id=? ORDER BY g.created_at DESC`, [req.user.id]);
+  res.json({ groups: rows });
+});
+
+r.post('/groups', async (req, res) => {
+  const { name, fromLabel, fromCoord, toLabel, toCoord } = req.body || {};
+  const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
+  if (!name || !String(name).trim()) return bad(res, 'اسم المجموعة مطلوب');
+  if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة');
+  const joinCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const id = await insertReturningId('groups',
+    ['name', 'from_label', 'from_lat', 'from_lng', 'to_label', 'to_lat', 'to_lng', 'creator_id', 'join_code', 'created_at'],
+    [String(name).trim().slice(0, 60), String(fromLabel || 'من'), A[0], A[1], String(toLabel || 'إلى'), B[0], B[1], req.user.id, joinCode, now()]);
+  await insertReturningId('group_members', ['group_id', 'user_id', 'role', 'joined_at'], [id, req.user.id, 'creator', now()]);
+  res.status(201).json({ group: await db.queryOne('SELECT * FROM groups WHERE id=?', [id]) });
+});
+
+r.get('/groups/:id', async (req, res) => {
+  const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
+  if (!g) return bad(res, 'المجموعة غير موجودة', 404);
+  const mine = await db.queryOne('SELECT * FROM group_members WHERE group_id=? AND user_id=?', [g.id, req.user.id]);
+  if (!mine) return bad(res, 'لست عضوًا في هذه المجموعة', 403);
+  const members = await db.query(
+    `SELECT gm.role, gm.joined_at, u.id user_id, u.name, u.role user_kind, u.rating
+     FROM group_members gm JOIN users u ON u.id=gm.user_id
+     WHERE gm.group_id=? ORDER BY gm.joined_at ASC`, [g.id]);
+  res.json({ group: g, members });
+});
+
+r.post('/groups/join', async (req, res) => {
+  const { code } = req.body || {};
+  if (!code || !String(code).trim()) return bad(res, 'أدخل رمز الدخول');
+  const g = await db.queryOne('SELECT * FROM groups WHERE join_code=?', [String(code).trim().toUpperCase()]);
+  if (!g) return bad(res, 'رمز الدخول غير صحيح', 404);
+  const already = await db.queryOne('SELECT * FROM group_members WHERE group_id=? AND user_id=?', [g.id, req.user.id]);
+  if (already) return bad(res, 'أنت عضو في هذه المجموعة بالفعل');
+  await insertReturningId('group_members', ['group_id', 'user_id', 'role', 'joined_at'], [g.id, req.user.id, 'member', now()]);
+  const u = await db.queryOne('SELECT name, role FROM users WHERE id=?', [req.user.id]);
+  if (g.creator_id !== req.user.id) {
+    const creator = await db.queryOne('SELECT role FROM users WHERE id=?', [g.creator_id]);
+    const creatorRoute = creator?.role === 'driver' ? '/(driver)/dgroups' : '/(passenger)/groups';
+    await addNotif(g.creator_id, 'account', 'green', 'عضو جديد في مجموعتك', `${u?.name || 'مستخدم'} انضمّ إلى «${g.name}»`, creatorRoute);
+  }
+  res.status(201).json({ group: g });
+});
+
+r.post('/groups/:id/leave', async (req, res) => {
+  const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
+  if (!g) return bad(res, 'المجموعة غير موجودة', 404);
+  await db.execute('DELETE FROM group_members WHERE group_id=? AND user_id=?', [g.id, req.user.id]);
+  const left = await db.query('SELECT * FROM group_members WHERE group_id=?', [g.id]);
+  if (left.length === 0) await db.execute('DELETE FROM groups WHERE id=?', [g.id]);
+  res.json({ ok: true });
+});
+
 // ============ البطاقات ============
 r.get('/cards', async (req, res) => res.json({ cards: await db.query('SELECT id,brand,last4,exp,holder FROM cards WHERE user_id=?', [req.user.id]) }));
 r.post('/cards', async (req, res) => {

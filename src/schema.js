@@ -257,6 +257,23 @@ const TABLES = [
     to_label TEXT, to_lat REAL, to_lng REAL,
     created_at ${NOW}
   )`,
+  // المجموعات: مسار ثابت جماعي (زملاء/طلاب) — ركّاب وسائقون معًا، عبر رمز دخول
+  `CREATE TABLE IF NOT EXISTS groups (
+    id ${ID},
+    name TEXT NOT NULL,
+    from_label TEXT, from_lat REAL, from_lng REAL,
+    to_label TEXT, to_lat REAL, to_lng REAL,
+    creator_id ${INT} NOT NULL,
+    join_code TEXT UNIQUE NOT NULL,
+    created_at ${NOW}
+  )`,
+  `CREATE TABLE IF NOT EXISTS group_members (
+    id ${ID},
+    group_id ${INT} NOT NULL,
+    user_id ${INT} NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
