@@ -68,6 +68,8 @@ app.get('/live/:token', (_req, res) => res.sendFile(path.join(__dirname, 'live.h
 // تحديد معدّل على النقاط الحسّاسة (مكافحة إساءة الاستخدام وتخمين كلمات المرور)
 app.use('/api/auth/otp/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
 app.use('/api/auth/otp/verify', rateLimit({ windowMs: 60000, max: 10, message: 'محاولات تحقّق كثيرة، انتظر قليلاً' }));
+app.use('/api/auth/email/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
+app.use('/api/auth/email/verify', rateLimit({ windowMs: 60000, max: 10, message: 'محاولات تحقّق كثيرة، انتظر قليلاً' }));
 app.use('/api/admin/login', rateLimit({ windowMs: 300000, max: 10, message: 'محاولات دخول كثيرة، انتظر قليلاً' }));
 
 app.use('/api/admin', adminRoutes);

@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const UPLOAD_DIR = path.join(path.dirname(process.env.DB_PATH || path.join(__dirname, '..', 'wasalni.db')), 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const { db, now, round2, insertReturningId, addTxn, addNotif, COMMISSION_RATE, SERVICE_COUNTRIES, commissionRate, serviceCountries, platformProfit, seatPriceForDistance, countrySetting } = require('./db');
-const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired } = require('./auth');
+const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp } = require('./auth');
 const { paymentsEnabled, verifyPayment } = require('./payments');
 
 const r = express.Router();
@@ -72,6 +72,22 @@ r.post('/auth/otp/verify', async (req, res) => {
   const { phone, dial, countryCode, code } = req.body || {};
   if (!phone || !code) return bad(res, 'الرقم والرمز مطلوبان');
   const out = await verifyOtp(String(phone), dial, countryCode, String(code));
+  if (out.error) return bad(res, out.error, 401);
+  res.json(out);
+});
+
+// ---- تسجيل الدخول بالبريد الإلكتروني (بديل للهاتف — يتطلّب بريدًا موثّقًا مسبقًا) ----
+r.post('/auth/email/send', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return bad(res, 'البريد الإلكتروني مطلوب');
+  const out = await sendEmailLoginOtp(String(email));
+  if (out.error) return bad(res, out.error, out.retryAfter ? 429 : 400);
+  res.json(out);
+});
+r.post('/auth/email/verify', async (req, res) => {
+  const { email, code } = req.body || {};
+  if (!email || !code) return bad(res, 'البريد والرمز مطلوبان');
+  const out = await verifyEmailLoginOtp(String(email), String(code));
   if (out.error) return bad(res, out.error, 401);
   res.json(out);
 });

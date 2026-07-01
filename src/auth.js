@@ -90,6 +90,48 @@ async function verifyOtp(phone, dial, countryCode, code) {
   return { token, user: await publicUser(user) };
 }
 
+// ---------- تسجيل الدخول بالبريد الإلكتروني (بديل للهاتف — يتطلّب بريدًا موثّقًا مسبقًا على الحساب) ----------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+async function sendEmailLoginOtp(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(e)) return { error: 'بريد إلكتروني غير صالح' };
+  const user = await db.queryOne('SELECT id FROM users WHERE LOWER(email)=? AND email_verified=1', [e]);
+  if (!user) return { error: 'لا يوجد حساب موثّق بهذا البريد' };
+  const existing = await db.queryOne('SELECT sent_at FROM email_otps WHERE email=?', [e]);
+  if (existing && existing.sent_at && (now() - Number(existing.sent_at)) < OTP_RESEND_MS) {
+    const wait = Math.ceil((OTP_RESEND_MS - (now() - Number(existing.sent_at))) / 1000);
+    return { error: `انتظر ${wait} ثانية قبل إعادة الإرسال`, retryAfter: wait };
+  }
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const ex = db.kind === 'postgres' ? 'EXCLUDED' : 'excluded';
+  await db.execute(
+    `INSERT INTO email_otps (email,code,expires_at,attempts,sent_at) VALUES (?,?,?,0,?)
+     ON CONFLICT(email) DO UPDATE SET code=${ex}.code, expires_at=${ex}.expires_at, attempts=0, sent_at=${ex}.sent_at`,
+    [e, code, now() + OTP_TTL_MS, now()]
+  );
+  const { sendEmailOtp } = require('./email');
+  const r = await sendEmailOtp(e, code);
+  return { sent: true, devCode: r.devCode };
+}
+
+async function verifyEmailLoginOtp(email, code) {
+  const e = String(email || '').trim().toLowerCase();
+  const row = await db.queryOne('SELECT code, expires_at, attempts FROM email_otps WHERE email=?', [e]);
+  if (!row) return { error: 'لم يُرسل رمز لهذا البريد' };
+  if (Number(row.attempts) >= OTP_MAX_ATTEMPTS) { await db.execute('DELETE FROM email_otps WHERE email=?', [e]); return { error: 'تجاوزت عدد المحاولات، أعد الإرسال' }; }
+  if (Number(row.expires_at) < now()) return { error: 'انتهت صلاحية الرمز، أعد الإرسال' };
+  if (row.code !== String(code)) {
+    await db.execute('UPDATE email_otps SET attempts=attempts+1 WHERE email=?', [e]);
+    return { error: 'الرمز غير صحيح' };
+  }
+  await db.execute('DELETE FROM email_otps WHERE email=?', [e]);
+  const user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=? AND email_verified=1', [e]);
+  if (!user) return { error: 'الحساب غير موجود' };
+  await ensureSeedForUser(user.id, user.name);
+  const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
+  return { token, user: await publicUser(user) };
+}
+
 async function publicUser(u) {
   const v = await db.queryOne('SELECT make,model,year,color,plate,capacity FROM vehicles WHERE user_id=?', [u.id]) || {};
   return {
@@ -127,4 +169,4 @@ async function authRequired(req, res, next) {
   }
 }
 
-module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired };
+module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp };
