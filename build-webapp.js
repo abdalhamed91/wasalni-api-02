@@ -6,7 +6,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const APP_DIST = path.resolve(__dirname, '../../wasalni-app/wasalni-app/dist');
+// المسار الجديد (المستودعان شقيقان تحت C:\Users\abdul\wasalni) مع بديل للمسار القديم
+const APP_DIST = fs.existsSync(path.resolve(__dirname, '../wasalni-app/dist'))
+  ? path.resolve(__dirname, '../wasalni-app/dist')
+  : path.resolve(__dirname, '../../wasalni-app/wasalni-app/dist');
 const WEBAPP = path.join(__dirname, 'webapp.html');
 
 // أحدث ملف entry-*.js
