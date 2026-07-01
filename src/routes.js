@@ -12,6 +12,7 @@ const { paymentsEnabled, verifyPayment } = require('./payments');
 
 const r = express.Router();
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 // رموز عملات الدول (للإشعارات والإيصالات) — الافتراضي د.أ (سوق الإطلاق: الأردن)
 const CURRENCY = { SA: 'ر.س', JO: 'د.أ', EG: 'ج.م', AE: 'د.إ', KW: 'د.ك', QA: 'ر.ق', BH: 'د.ب', OM: 'ر.ع', PS: '₪', IQ: 'د.ع', LB: 'ل.ل', SY: 'ل.س' };
@@ -270,10 +271,13 @@ r.post('/wallet/topup', async (req, res) => {
     amount = round2(pay.amount);
     await db.execute('INSERT INTO payments (user_id,provider,ref,amount,created_at) VALUES (?,?,?,?,?)',
       [req.user.id, 'moyasar', pay.id, amount, now()]);
-  } else {
-    // وضع التطوير (بلا بوّابة): شحن مباشر للاختبار فقط
+  } else if (!IS_PROD) {
+    // وضع التطوير المحلي فقط (بلا بوّابة دفع): شحن مباشر للاختبار
     if (!Number.isFinite(amount) || amount <= 0 || amount > 5000) return bad(res, 'مبلغ شحن غير صالح');
     amount = round2(amount);
+  } else {
+    // إنتاج بلا بوّابة دفع مُفعّلة: لا شحن مجّاني — يمنع تضخيم الرصيد بلا دفع حقيقي
+    return bad(res, 'شحن المحفظة غير متاح حاليًا — تواصل مع الدعم');
   }
 
   await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [amount, req.user.id]);
@@ -762,10 +766,11 @@ r.get('/rides/search', async (req, res) => {
 // ============ خدمة «اطلب توصيلة» (الراكب يبثّ طلبه، السائق القريب يقبله) ============
 // الراكب ينشئ طلب توصيلة (من ← إلى) — تُحسب الأجرة التقديرية بالمسافة وتُتحقّق المحفظة
 r.post('/ride-requests', async (req, res) => {
-  const { fromLabel, fromCoord, toLabel, toCoord, seats, note, time } = req.body || {};
+  const { fromLabel, fromCoord, toLabel, toCoord, seats, note, time, payment } = req.body || {};
   const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
   if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة على الخريطة');
   const s = Math.max(1, Math.min(6, parseInt(seats, 10) || 1));
+  const pm = payment === 'cash' ? 'cash' : 'wallet';
   const rideTime = (time && String(time).trim()) ? String(time).trim().slice(0, 40) : 'الآن';
   const u = await db.queryOne('SELECT name, wallet, country_code FROM users WHERE id=?', [req.user.id]);
   const km = haversineKm(A, B);
@@ -774,8 +779,8 @@ r.post('/ride-requests', async (req, res) => {
   // طلب نشط واحد: ألغِ أي طلب قيد التفاوض سابق
   await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status IN ('open','offered','countered')", [req.user.id]);
   const id = await insertReturningId('ride_requests',
-    ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','ride_time','status','created_at'],
-    [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, rideTime, 'open', now()]);
+    ['passenger_id','passenger_name','country_code','from_label','from_lat','from_lng','to_label','to_lat','to_lng','seats','fare','note','ride_time','status','payment','created_at'],
+    [req.user.id, u.name || 'راكب', u.country_code || 'JO', String(fromLabel || 'موقعي'), A[0], A[1], String(toLabel || 'الوجهة'), B[0], B[1], s, fare, note ? String(note).slice(0, 200) : null, rideTime, 'open', pm, now()]);
   // إعلام السائقين الموثّقين في نفس البلد بطلب جديد (إشعار داخلي + دفع للجهاز)
   try {
     const cc = u.country_code || 'JO';
@@ -829,33 +834,37 @@ r.get('/driver/ride-requests', async (req, res) => {
   res.json({ requests: rows });
 });
 
-// يُتمّ الاتفاق: يخصم الأجرة المتّفق عليها، وينشئ رحلة + حجزًا مؤكّدًا (ذرّيًّا)
+// يُتمّ الاتفاق: يخصم الأجرة المتّفق عليها (أو يترك للتحصيل نقدًا)، وينشئ رحلة + حجزًا مؤكّدًا (ذرّيًّا)
 async function finalizeRideRequest(rr, driverId, finalFare) {
   const fare = round2(finalFare);
+  const cash = rr.payment === 'cash';
   // 1) اطلب الطلب ذرّيًا (يمنع الإتمام المزدوج إن ضُغط مرّتين أو من جهازين)
   const claim = await db.execute("UPDATE ride_requests SET status='accepted', driver_id=? WHERE id=? AND status IN ('offered','countered')", [driverId, rr.id]);
   if (!claim.rowCount) return { error: 'لم يعد هذا الطلب متاحًا' };
-  // 2) اخصم الأجرة ذرّيًا — وأعِد الطلب لحالته السابقة إن فشل الدفع
-  const pay = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, rr.passenger_id, fare]);
-  if (!pay.rowCount) {
-    await db.execute('UPDATE ride_requests SET status=? WHERE id=?', [rr.status, rr.id]);
-    return { error: 'رصيد الراكب غير كافٍ لإتمام الطلب' };
+  // 2) الدفع: نقدًا = بلا خصم محفظة (يُحصّل من السائق)؛ محفظة = خصم ذرّي وإلا أعد الطلب لحالته
+  if (!cash) {
+    const pay = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, rr.passenger_id, fare]);
+    if (!pay.rowCount) {
+      await db.execute('UPDATE ride_requests SET status=? WHERE id=?', [rr.status, rr.id]);
+      return { error: 'رصيد الراكب غير كافٍ لإتمام الطلب — أو اختر الدفع نقدًا' };
+    }
   }
   const drv = await db.queryOne('SELECT name FROM users WHERE id=?', [driverId]);
   const veh = await db.queryOne('SELECT make,model,color,plate FROM vehicles WHERE user_id=?', [driverId]) || {};
   const tTime = rr.ride_time || 'الآن';
+  const pm = cash ? 'cash' : 'wallet';
   const tripId = await insertReturningId('trips',
     ['driver_id','from_label','to_label','from_lat','from_lng','to_lat','to_lng','date','time','price_per_seat','total_seats','gender_pref','kind','status','created_at'],
     [driverId, rr.from_label, rr.to_label, rr.from_lat, rr.from_lng, rr.to_lat, rr.to_lng, 'اليوم', tTime, round2(fare / rr.seats), 0, 'any', 'city', 'scheduled', now()]);
   const reqId = await insertReturningId('requests',
-    ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status'],
-    [tripId, rr.passenger_id, rr.passenger_name || 'راكب', 5, rr.seats, rr.from_label, rr.from_lat, rr.from_lng, fare, 'accepted']);
+    ['trip_id','passenger_id','passenger_name','rating','seats','pickup','pickup_lat','pickup_lng','fare','status','payment'],
+    [tripId, rr.passenger_id, rr.passenger_name || 'راكب', 5, rr.seats, rr.from_label, rr.from_lat, rr.from_lng, fare, 'accepted', pm]);
   const car = [veh.make, veh.model, veh.color].filter(Boolean).join(' ') || 'مركبة';
   const bookingId = await insertReturningId('bookings',
-    ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','status','created_at'],
-    [rr.passenger_id, reqId, drv.name || 'سائق', 5, car, veh.plate || '', rr.from_label, rr.to_label, '', rr.seats, fare, 'confirmed', now()]);
+    ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','status','payment','created_at'],
+    [rr.passenger_id, reqId, drv.name || 'سائق', 5, car, veh.plate || '', rr.from_label, rr.to_label, '', rr.seats, fare, 'confirmed', pm, now()]);
   await db.execute("UPDATE ride_requests SET trip_id=?, fare=? WHERE id=?", [tripId, fare, rr.id]);
-  await addTxn(rr.passenger_id, 'passenger', `توصيلة · ${rr.from_label} ← ${rr.to_label}`, fare, 'out');
+  if (!cash) await addTxn(rr.passenger_id, 'passenger', `توصيلة · ${rr.from_label} ← ${rr.to_label}`, fare, 'out');
   await addNotif(rr.passenger_id, 'check', 'green', 'تم الاتفاق على رحلتك ✓', `${drv.name || 'سائق'} في طريقه إليك — تابع موقعه`, '/(passenger)/tracking');
   await addNotif(driverId, 'car', 'blue', 'تم الاتفاق على توصيلة', `${rr.from_label} ← ${rr.to_label} · ${fare}`, '/(driver)/dmytrips');
   return { tripId, bookingId, fare };

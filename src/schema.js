@@ -42,6 +42,14 @@ const TABLES = [
     attempts ${INT} NOT NULL DEFAULT 0,
     sent_at ${INT} NOT NULL DEFAULT 0
   )`,
+  // رمز دخول بالبريد (منفصل عن email_otp الخاص بتوثيق تغيير البريد في الملف الشخصي)
+  `CREATE TABLE IF NOT EXISTS email_otps (
+    email TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
+    expires_at ${INT} NOT NULL,
+    attempts ${INT} NOT NULL DEFAULT 0,
+    sent_at ${INT} NOT NULL DEFAULT 0
+  )`,
   `CREATE TABLE IF NOT EXISTS vehicles (
     user_id ${INT} PRIMARY KEY,
     make TEXT, model TEXT, year TEXT, color TEXT, plate TEXT, capacity ${INT} DEFAULT 4
@@ -246,6 +254,7 @@ const TABLES = [
     status TEXT NOT NULL DEFAULT 'open',
     driver_id ${INT},
     trip_id ${INT},
+    payment TEXT NOT NULL DEFAULT 'wallet',
     created_at ${NOW}
   )`,
   // المسارات المحفوظة (للسائق والراكب) — نشر/طلب بضغطة
@@ -350,6 +359,8 @@ async function runMigrations() {
   // مفاوضة سعر طلب التوصيلة
   await ensureColumn('ride_requests', 'offered_fare', 'REAL');
   await ensureColumn('ride_requests', 'offer_by', "TEXT DEFAULT ''");
+  // طريقة الدفع لطلب التوصيلة: wallet أو cash (نفس نمط الحجوزات)
+  await ensureColumn('ride_requests', 'payment', "TEXT DEFAULT 'wallet'");
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

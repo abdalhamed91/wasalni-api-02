@@ -18,7 +18,8 @@ if (IS_PROD) {
     console.warn('⚠️ JWT_SECRET غير مضبوط — وُلّد سرّ مؤقّت (ستُعاد جلسات الدخول عند كل إعادة تشغيل). اضبط JWT_SECRET ثابتًا في Railway.');
   }
   if (!process.env.ADMIN_SECRET || process.env.ADMIN_SECRET === 'wasalni-admin') {
-    console.warn('⚠️ ADMIN_SECRET غير مضبوط — كلمة مرور الإدارة الافتراضية (wasalni-admin). اضبط كلمة قوية في Railway.');
+    process.env.ADMIN_SECRET = crypto.randomBytes(16).toString('hex');
+    console.warn('⚠️ ADMIN_SECRET غير مضبوط — وُلّدت كلمة مرور مؤقّتة (لن تستطيع الدخول للوحة الإدارة حتى تضبط ADMIN_SECRET ثابتًا في Railway). هذا أأمن من ترك كلمة المرور الافتراضية معروفة.');
   }
 }
 

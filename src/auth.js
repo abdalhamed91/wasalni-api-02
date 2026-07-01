@@ -59,7 +59,10 @@ async function checkOtp(phone, code) {
   return { ok: true };
 }
 
+const CC_RE = /^[A-Z]{2}$/;
 async function verifyOtp(phone, dial, countryCode, code) {
+  // كود بلد بصيغة ISO 3166-1 alpha-2 فقط (حرفان) — أي شيء آخر يُتجاهل بدل تخزينه كما هو
+  const cc = CC_RE.test(String(countryCode || '').toUpperCase()) ? String(countryCode).toUpperCase() : null;
   const row = await db.queryOne('SELECT code, expires_at, attempts FROM otps WHERE phone=?', [phone]);
   const master = DEV_MODE && code === '0000';
   if (!master) {
@@ -76,10 +79,10 @@ async function verifyOtp(phone, dial, countryCode, code) {
   let user = await db.queryOne('SELECT * FROM users WHERE phone=?', [phone]);
   if (!user) {
     const { insertReturningId } = require('./db');
-    const id = await insertReturningId('users', ['phone', 'dial', 'country_code', 'created_at'], [phone, dial || '+962', countryCode || 'JO', now()]);
+    const id = await insertReturningId('users', ['phone', 'dial', 'country_code', 'created_at'], [phone, dial || '+962', cc || 'JO', now()]);
     user = await db.queryOne('SELECT * FROM users WHERE id=?', [id]);
-  } else if (countryCode) {
-    await db.execute('UPDATE users SET dial=?, country_code=? WHERE id=?', [dial || user.dial, countryCode, user.id]);
+  } else if (cc) {
+    await db.execute('UPDATE users SET dial=?, country_code=? WHERE id=?', [dial || user.dial, cc, user.id]);
     user = await db.queryOne('SELECT * FROM users WHERE id=?', [user.id]);
   }
   await ensureSeedForUser(user.id, user.name);

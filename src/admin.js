@@ -1,6 +1,7 @@
 // وحدة إدارة وصلني — مصادقة المسؤول + تجميع البيانات + إجراءات التشغيل
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const PG_BOOL = require('./database').kind === 'postgres';
 const { db, now, round2, insertReturningId, COMMISSION_RATE, SERVICE_COUNTRIES, addNotif, getConfig, setConfig, commissionRate, serviceCountries, allCountrySettings, setCountrySetting, countrySetting } = require('./db');
 
@@ -14,10 +15,17 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 const CURR = { SA: 'ر.س', JO: 'د.أ', EG: 'ج.م', AE: 'د.إ', KW: 'د.ك', QA: 'ر.ق', BH: 'د.ب', OM: 'ر.ع', PS: '₪', IQ: 'د.ع', LB: 'ل.ل' };
 const curOf = (code) => CURR[code] || 'د.أ';
 
+// مقارنة زمن ثابت (تفادي تسريب كلمة المرور عبر توقيت الاستجابة)
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a)), bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 // ---------- مصادقة المسؤول ----------
 r.post('/login', async (req, res) => {
   const { passcode } = req.body || {};
-  if (String(passcode || '') !== ADMIN_SECRET) return bad(res, 'كلمة مرور الإدارة غير صحيحة', 401);
+  if (!safeEqual(passcode || '', ADMIN_SECRET)) return bad(res, 'كلمة مرور الإدارة غير صحيحة', 401);
   const token = jwt.sign({ admin: true }, SECRET, { expiresIn: '7d' });
   res.json({ token });
 });
