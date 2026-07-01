@@ -90,13 +90,13 @@ async function verifyOtp(phone, dial, countryCode, code) {
   return { token, user: await publicUser(user) };
 }
 
-// ---------- تسجيل الدخول بالبريد الإلكتروني (بديل للهاتف — يتطلّب بريدًا موثّقًا مسبقًا على الحساب) ----------
+// ---------- الدخول أو التسجيل بالبريد الإلكتروني (بديل للهاتف) ----------
+// يرسل رمزًا لأي بريد صالح؛ عند التحقّق: يدخل الحساب الموجود بهذا البريد،
+// أو يُنشئ حسابًا جديدًا (تسجيل) إن لم يوجد — تمامًا كما يفعل رمز الهاتف.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 async function sendEmailLoginOtp(email) {
   const e = String(email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(e)) return { error: 'بريد إلكتروني غير صالح' };
-  const user = await db.queryOne('SELECT id FROM users WHERE LOWER(email)=? AND email_verified=1', [e]);
-  if (!user) return { error: 'لا يوجد حساب موثّق بهذا البريد' };
   const existing = await db.queryOne('SELECT sent_at FROM email_otps WHERE email=?', [e]);
   if (existing && existing.sent_at && (now() - Number(existing.sent_at)) < OTP_RESEND_MS) {
     const wait = Math.ceil((OTP_RESEND_MS - (now() - Number(existing.sent_at))) / 1000);
@@ -125,8 +125,20 @@ async function verifyEmailLoginOtp(email, code) {
     return { error: 'الرمز غير صحيح' };
   }
   await db.execute('DELETE FROM email_otps WHERE email=?', [e]);
-  const user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=? AND email_verified=1', [e]);
-  if (!user) return { error: 'الحساب غير موجود' };
+  let user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [e]);
+  if (!user) {
+    // تسجيل جديد بالبريد: هاتف نائب فريد (email:<البريد>) لأن العمود NOT NULL UNIQUE —
+    // يُخفى في publicUser، ويُستبدل لاحقًا إن أضاف المستخدم رقمه من الإعدادات.
+    const { insertReturningId } = require('./db');
+    const id = await insertReturningId('users',
+      ['phone', 'email', 'email_verified', 'country_code', 'created_at'],
+      ['email:' + e, e, 1, 'JO', now()]);
+    user = await db.queryOne('SELECT * FROM users WHERE id=?', [id]);
+  } else if (!Number(user.email_verified)) {
+    // حساب موجود بهذا البريد لكنه غير موثّق بعد — التحقّق يوثّقه الآن
+    await db.execute('UPDATE users SET email_verified=1 WHERE id=?', [user.id]);
+    user = await db.queryOne('SELECT * FROM users WHERE id=?', [user.id]);
+  }
   await ensureSeedForUser(user.id, user.name);
   const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
   return { token, user: await publicUser(user) };
@@ -149,10 +161,19 @@ async function verifyGoogleLogin(idToken) {
   }
   if (!payload || !payload.email || !payload.email_verified) return { error: 'حساب جوجل غير موثّق البريد' };
   const email = String(payload.email).toLowerCase();
-  const user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [email]);
-  if (!user) return { error: 'لا يوجد حساب بهذا البريد — سجّل عبر رقم جوالك أولًا ثم أضِف بريدك من الإعدادات' };
-  // بريد جوجل موثّق فعليًّا من جوجل نفسها
-  if (!Number(user.email_verified)) await db.execute('UPDATE users SET email_verified=1 WHERE id=?', [user.id]);
+  let user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [email]);
+  if (!user) {
+    // تسجيل جديد بجوجل: هاتف نائب فريد (يُخفى في publicUser) + اسم جوجل إن توفّر
+    const { insertReturningId } = require('./db');
+    const gName = String(payload.name || '').slice(0, 60);
+    const id = await insertReturningId('users',
+      ['phone', 'email', 'email_verified', 'name', 'country_code', 'created_at'],
+      ['email:' + email, email, 1, gName, 'JO', now()]);
+    user = await db.queryOne('SELECT * FROM users WHERE id=?', [id]);
+  } else if (!Number(user.email_verified)) {
+    // بريد جوجل موثّق فعليًّا من جوجل نفسها
+    await db.execute('UPDATE users SET email_verified=1 WHERE id=?', [user.id]);
+  }
   await ensureSeedForUser(user.id, user.name);
   const fresh = await db.queryOne('SELECT * FROM users WHERE id=?', [user.id]);
   const token = jwt.sign({ uid: user.id }, SECRET, { expiresIn: '30d' });
@@ -161,8 +182,10 @@ async function verifyGoogleLogin(idToken) {
 
 async function publicUser(u) {
   const v = await db.queryOne('SELECT make,model,year,color,plate,capacity FROM vehicles WHERE user_id=?', [u.id]) || {};
+  // الهاتف النائب لحسابات البريد (email:<البريد>) لا يُعرض كرقم — يظهر فارغًا حتى يضيف المستخدم رقمه
+  const phone = String(u.phone || '').startsWith('email:') ? '' : u.phone;
   return {
-    id: u.id, phone: u.phone, dial: u.dial, countryCode: u.country_code,
+    id: u.id, phone, dial: u.dial, countryCode: u.country_code,
     role: u.role, gender: u.gender, name: u.name, email: u.email,
     emailVerified: db.kind === 'postgres' ? !!u.email_verified : !!Number(u.email_verified),
     rating: u.rating,
