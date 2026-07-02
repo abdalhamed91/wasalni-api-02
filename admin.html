@@ -526,12 +526,13 @@ async function renderTrips(c){
   const {trips}=await apiGet('/trips');
   if(!trips.length){ c.innerHTML='<div class="empty">لا توجد رحلات منشورة بعد.</div>'; return; }
   window._trips=trips;
+  cacheTrips(trips);
   c.innerHTML = filterControls('tblTrips',{placeholder:'بحث بالسائق أو المسار…',exportKind:'trips',
     filters:[{col:1,label:'الدولة',options:countryFilterOptions()},
              {col:7,label:'الحالة',options:[{v:'مجدولة',t:'مجدولة'},{v:'جارية',t:'جارية'},{v:'مكتملة',t:'مكتملة'},{v:'ملغاة',t:'ملغاة'}]}]})
     + `<div class="card" style="padding:0;overflow:hidden"><table id="tblTrips">
     <thead><tr><th>السائق</th><th>الدولة/المدينة</th><th>المسار</th><th>الوقت</th><th>السعر/مقعد</th><th>المقاعد</th><th>الطلبات</th><th>الحالة</th></tr></thead>
-    <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr style="cursor:pointer" onclick="openTripDetail('${t.id}')">
+    <tbody>${trips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `<tr style="cursor:pointer" onclick="openTripDetailFull('${t.id}')">
       <td>${esc(t.driver_name)}</td>
       <td>${esc(CC_NAMES[t.country_code]||t.country_code||'—')}${t.city?' <span class="muted" style="font-size:11px">'+esc(t.city)+'</span>':''}</td>
       <td>${esc(t.from_label)} ← ${esc(t.to_label)}</td>
@@ -561,29 +562,63 @@ async function renderBookings(c){
       <td class="num">${CUR[b.country_code]||''} ${fmt(b.fare)}</td>
       <td><span class="tag ${tg[0]}">${tg[1]}</span></td></tr>`;}).join('')}</tbody></table></div>`;
 }
-// فتح تفاصيل رحلة كاملةً
-function openTripDetail(id){
-  const t=(window._trips||[]).find(x=>String(x.id)===String(id)); if(!t) return;
+// ذاكرة تخزين مؤقت مشتركة للرحلات (تُغذّى من صفحتي الرحلات والعمليات) لفتح نفس نافذة التفاصيل من كليهما
+function cacheTrips(trips){ window._tripsById=window._tripsById||{}; (trips||[]).forEach(t=>{ window._tripsById[t.id]=t; }); }
+function tripLookup(id){ return (window._tripsById&&window._tripsById[id]) || (window._trips||[]).find(x=>String(x.id)===String(id)); }
+// فتح تفاصيل رحلة كاملةً مع خارطة ثابتة للمسار (تُستخدم من صفحتي الرحلات والعمليات)
+function openTripDetailFull(id){
+  const t=tripLookup(id); if(!t) return;
   const r=(l,v)=>(v===undefined||v===null||v==='')?'':`<div class="detail-row"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
   const tg=tripTag[t.status]||['t-gray',t.status];
   const cur=CUR[t.country_code]||'';
+  const hasMap=t.from_lat!=null&&t.from_lng!=null&&t.to_lat!=null&&t.to_lng!=null;
   const html=
     r('السائق',esc(t.driver_name))+
     r('الدولة',esc(CC_NAMES[t.country_code]||t.country_code||'—'))+
     r('المدينة',esc(t.city||'—'))+
     r('من',esc(t.from_label))+
     r('إلى',esc(t.to_label))+
-    r('إحداثيات الانطلاق',t.from_lat!=null?`${(+t.from_lat).toFixed(4)}, ${(+t.from_lng).toFixed(4)}`:'')+
-    r('إحداثيات الوجهة',t.to_lat!=null?`${(+t.to_lat).toFixed(4)}, ${(+t.to_lng).toFixed(4)}`:'')+
     r('التاريخ/الوقت',esc((t.date&&t.date!=='اليوم'?t.date+' · ':'')+(t.time||'')))+
     r('السعر لكل مقعد',`${cur} ${fmt(t.price_per_seat)}`)+
-    r('المقاعد',`${fmt(t.accepted_count)}/${fmt(t.total_seats)}`)+
-    r('عدد الطلبات',fmt(t.req_count))+
+    r('المقاعد',`${fmt(t.accepted_count!=null?t.accepted_count:'—')}/${fmt(t.total_seats)}`)+
+    r('عدد الطلبات',t.req_count!=null?fmt(t.req_count):(t.requests?fmt(t.requests.length):''))+
     r('نوع الخدمة',esc(t.kind||'city'))+
     r('تفضيل الجنس',esc(t.gender_pref==='female'?'إناث فقط':'الكل'))+
     r('الحالة',`<span class="tag ${tg[0]}">${tg[1]}</span>`)+
+    (t.cancel_reason?r('سبب الإلغاء',esc(t.cancel_reason)):'')+
     r('رقم الرحلة','#'+esc(t.id));
-  openModal('تفاصيل الرحلة',html);
+  const reqRows=(t.requests&&t.requests.length)?`<div style="margin-top:14px"><div style="font-size:12.5px;font-weight:700;margin-bottom:8px">🧍 الطلبات (${t.requests.length})</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${t.requests.map(rq=>`<span class="tag ${rq.status==='accepted'?'t-green':rq.status==='rejected'?'t-red':'t-am'}">${esc(rq.passenger_name)} · ${esc(REQ_STATUS[rq.status]||rq.status)}</span>`).join('')}</div></div>`:'';
+  const mapHtml=hasMap?`<div id="tripDetailMap" style="height:220px;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-top:14px"></div>`:'';
+  const actions=`<div class="row" style="gap:8px;margin-top:16px">
+    ${!['completed','cancelled'].includes(t.status)?`<button class="btn btn-rd" onclick="cancelTripAdmin('${t.id}')">✗ إلغاء الرحلة</button>`:''}
+    <button class="btn btn-gh" onclick="messageUserForm(${t.driver_id})">💬 محادثة السائق</button>
+  </div>`;
+  openModal('تفاصيل الرحلة',html+reqRows+mapHtml+actions);
+  if(hasMap) ensureLeaflet().then(()=>setTimeout(()=>initTripDetailMap(t),0));
+}
+let _tripDetailMap=null;
+function initTripDetailMap(t){
+  const el=document.getElementById('tripDetailMap'); if(!el||!window.L) return;
+  if(_tripDetailMap){ try{_tripDetailMap.remove();}catch(e){} _tripDetailMap=null; }
+  _tripDetailMap=L.map('tripDetailMap',{scrollWheelZoom:false}).setView([+t.from_lat,+t.from_lng],12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(_tripDetailMap);
+  const pts=[[+t.from_lat,+t.from_lng],[+t.to_lat,+t.to_lng]];
+  L.marker(pts[0]).addTo(_tripDetailMap).bindPopup('🟢 '+(t.from_label||'الانطلاق'));
+  L.marker(pts[1]).addTo(_tripDetailMap).bindPopup('🔴 '+(t.to_label||'الوجهة'));
+  L.polyline(pts,{color:'#0F2F72',weight:4,opacity:.75}).addTo(_tripDetailMap);
+  if(t.status==='live'&&t.driver_lat!=null&&t.driver_lng!=null){
+    L.circleMarker([+t.driver_lat,+t.driver_lng],{radius:8,color:'#FF6320',fillColor:'#FF6320',fillOpacity:.9}).addTo(_tripDetailMap).bindPopup('🚗 موقع السائق الآن');
+    pts.push([+t.driver_lat,+t.driver_lng]);
+  }
+  _tripDetailMap.invalidateSize();
+  _tripDetailMap.fitBounds(pts,{padding:[30,30],maxZoom:15,animate:false});
+}
+async function cancelTripAdmin(id){
+  const reason=prompt('سبب الإلغاء (يصل للسائق والركاب):','أُلغيت من الإدارة');
+  if(reason===null) return;
+  try{ await apiSend('/trips/'+id+'/cancel','POST',{reason}); toast('✅ أُلغيت الرحلة وأُشعر السائق والركاب'); closeModal(); render(); }
+  catch(e){ toast('تعذّر: '+e.message); }
 }
 // فتح تفاصيل حجز كاملةً
 function openBookingDetail(id){
@@ -1065,6 +1100,7 @@ function initOpsMap(trips){
 }
 async function renderOperations(c){
   const o=await apiGet('/operations');
+  cacheTrips(o.activeTrips);
   const s=o.summary;
   c.innerHTML=`
     <div class="grid g3" style="margin-bottom:18px">
@@ -1077,9 +1113,9 @@ async function renderOperations(c){
       <div id="opsMap" style="height:380px;border-radius:14px;overflow:hidden;border:1px solid var(--line)"></div>
     </div>
     <div class="card">
-      <h3 style="font-size:15px;margin-bottom:14px">🗺 الرحلات النشطة وطلباتها</h3>
+      <h3 style="font-size:15px;margin-bottom:14px">🗺 الرحلات النشطة وطلباتها <span class="muted" style="font-weight:400">(اضغط على رحلة لعرض التفاصيل)</span></h3>
       ${o.activeTrips.length? o.activeTrips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `
-        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
+        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;cursor:pointer" onclick="openTripDetailFull('${t.id}')">
           <div class="row" style="justify-content:space-between;margin-bottom:8px">
             <b>${esc(t.driver_name||'سائق')} · ${esc(t.from_label||'')} ← ${esc(t.to_label||'')}</b>
             <span class="tag ${tg[0]}">${esc(tg[1])}</span>

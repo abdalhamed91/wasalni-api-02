@@ -3,7 +3,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const PG_BOOL = require('./database').kind === 'postgres';
-const { db, now, round2, insertReturningId, COMMISSION_RATE, SERVICE_COUNTRIES, addNotif, getConfig, setConfig, commissionRate, serviceCountries, allCountrySettings, setCountrySetting, countrySetting } = require('./db');
+const { db, now, round2, insertReturningId, COMMISSION_RATE, SERVICE_COUNTRIES, addNotif, addTxn, getConfig, setConfig, commissionRate, serviceCountries, allCountrySettings, setCountrySetting, countrySetting } = require('./db');
 
 const SECRET = process.env.JWT_SECRET || 'wasalni-dev-secret-change-in-production';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'wasalni-admin';   // كلمة مرور لوحة الإدارة (غيّرها في الإنتاج)
@@ -90,13 +90,17 @@ r.get('/users', async (req, res) => {
   res.json({ users: rows.map(u => ({ ...u, ...dispPhone(u.dial, u.phone), trips: tripMap[u.id] || 0, bookings: bookMap[u.id] || 0, vehicle: vehMap[u.id] || null })) });
 });
 
-// إيقaف/تفعيل مستخدم
+// إيقaف/تفعيل مستخدم — يُمنع فورًا من أي طلب جديد (authRequired يتحقّق من status في كل نقطة)
 r.patch('/users/:id/status', async (req, res) => {
   const status = String(req.body?.status || '');
   if (!['active', 'suspended'].includes(status)) return bad(res, 'حالة غير صالحة');
   const u = await db.queryOne('SELECT id FROM users WHERE id=?', [Number(req.params.id)]);
   if (!u) return bad(res, 'المستخدم غير موجود', 404);
   await db.execute('UPDATE users SET status=? WHERE id=?', [status, u.id]);
+  // سجلّ للمستخدم يوضّح سبب/زمن الإيقاف أو التفعيل (يظهر له عند عودة حسابه نشطًا)
+  await addNotif(u.id, status === 'suspended' ? 'x' : 'check', status === 'suspended' ? 'red' : 'green',
+    status === 'suspended' ? 'تم إيقاف حسابك' : 'تم تفعيل حسابك',
+    status === 'suspended' ? 'تواصل مع الدعم لمعرفة السبب.' : 'يمكنك الآن استخدام التطبيق بشكل طبيعي.');
   res.json({ id: u.id, status });
 });
 
@@ -218,6 +222,32 @@ r.get('/trips', async (_req, res) => {
      FROM trips t JOIN users u ON u.id=t.driver_id ORDER BY t.created_at DESC LIMIT 200`
   , []);
   res.json({ trips: rows });
+});
+
+// إلغاء رحلة من الإدارة — يسترجع ركّاب الحجوزات النشطة (محفظة فقط) ويُشعرهم والسائق
+r.post('/trips/:id/cancel', async (req, res) => {
+  const trip = await db.queryOne('SELECT * FROM trips WHERE id=?', [Number(req.params.id)]);
+  if (!trip) return bad(res, 'الرحلة غير موجودة', 404);
+  if (['completed', 'cancelled'].includes(trip.status)) return bad(res, 'لا يمكن إلغاء هذه الرحلة');
+  const reason = req.body?.reason ? String(req.body.reason).slice(0, 300) : 'أُلغيت من الإدارة';
+  const active = await db.query("SELECT * FROM requests WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
+  for (const rq of active) {
+    if (rq.passenger_id) {
+      const bk = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [rq.id]);
+      if (bk) {
+        await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [bk.id]);
+        if (bk.payment !== 'cash') {
+          await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
+          await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة أُلغيت من الإدارة', bk.fare, 'in');
+        }
+      }
+      await addNotif(rq.passenger_id, 'x', 'red', 'أُلغيت رحلتك', `${trip.from_label} ← ${trip.to_label} — ${reason}`, '/(passenger)/wallet');
+    }
+  }
+  await db.execute("UPDATE requests SET status='cancelled' WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
+  await db.execute("UPDATE trips SET status='cancelled', cancel_reason=? WHERE id=?", [reason, trip.id]);
+  await addNotif(trip.driver_id, 'x', 'red', 'أُلغيت رحلتك من الإدارة', `${trip.from_label} ← ${trip.to_label} — ${reason}`, '/(driver)/dmytrips');
+  res.json({ ok: true });
 });
 
 // ---------- الحجوزات ----------
