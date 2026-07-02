@@ -15,6 +15,10 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 const CURR = { SA: 'ر.س', JO: 'د.أ', EG: 'ج.م', AE: 'د.إ', KW: 'د.ك', QA: 'ر.ق', BH: 'د.ب', OM: 'ر.ع', PS: '₪', IQ: 'د.ع', LB: 'ل.ل' };
 const curOf = (code) => CURR[code] || 'د.أ';
 
+// حسابات التسجيل بالبريد تُخزَّن برقم هاتف نائب (email:<البريد>) — لا يُعرض كرقم في لوحة الإدارة
+const isEmailPhone = (phone) => /^email:/.test(String(phone || ''));
+const dispPhone = (dial, phone) => isEmailPhone(phone) ? { dial: '', phone: '📧 حساب بريد (بلا هاتف)' } : { dial: dial || '', phone: phone || '' };
+
 // مقارنة زمن ثابت (تفادي تسريب كلمة المرور عبر توقيت الاستجابة)
 function safeEqual(a, b) {
   const bufA = Buffer.from(String(a)), bufB = Buffer.from(String(b));
@@ -54,9 +58,10 @@ r.get('/stats', async (_req, res) => {
   const tripsLive = (await db.queryOne("SELECT COUNT(*) c FROM trips WHERE status='live'", [])).c;
   const bookings = (await db.queryOne('SELECT COUNT(*) c FROM bookings', [])).c;
   const bookingsCompleted = (await db.queryOne("SELECT COUNT(*) c FROM bookings WHERE status='completed'", [])).c;
-  // الإيراد = مجموع أجور الحجوزات غير الملغاة ؛ العمولة = صافي دخل المنصة
+  // الإيراد = مجموع أجور الحجوزات غير الملغاة ؛ العمولة = مجموع عمولات المنصة الفعلية المسجّلة
+  // (لا نضربها بنسبة عامة واحدة — كل دولة لها تسعير عمولة مستقل، فيختلف الرقم الفعلي عن التقديري)
   const gross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM bookings WHERE status!='cancelled'", [])).s);
-  const commission = round2(gross * await commissionRate());
+  const commission = round2((await db.queryOne("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE scope='platform'", [])).s);
   const walletsTotal = round2((await db.queryOne('SELECT COALESCE(SUM(wallet),0) s FROM users', [])).s);
   const earningsOwed = round2((await db.queryOne('SELECT COALESCE(SUM(earnings),0) s FROM users', [])).s);
   const openReports = (await db.queryOne("SELECT COUNT(*) c FROM reports WHERE status='open'", [])).c;
@@ -82,7 +87,7 @@ r.get('/users', async (req, res) => {
   const tripMap = {}; for (const t of tripRows) tripMap[t.driver_id] = Number(t.c);
   const bookMap = {}; for (const b of bookRows) bookMap[b.passenger_id] = Number(b.c);
   const vehMap = {}; for (const v of vehRows) vehMap[v.user_id] = { make: v.make, model: v.model, year: v.year, color: v.color, plate: v.plate };
-  res.json({ users: rows.map(u => ({ ...u, trips: tripMap[u.id] || 0, bookings: bookMap[u.id] || 0, vehicle: vehMap[u.id] || null })) });
+  res.json({ users: rows.map(u => ({ ...u, ...dispPhone(u.dial, u.phone), trips: tripMap[u.id] || 0, bookings: bookMap[u.id] || 0, vehicle: vehMap[u.id] || null })) });
 });
 
 // إيقaف/تفعيل مستخدم
@@ -107,6 +112,7 @@ r.get('/users/:id', async (req, res) => {
   const recentTrips = await db.query('SELECT from_label,to_label,price_per_seat,status,created_at FROM trips WHERE driver_id=? ORDER BY created_at DESC LIMIT 5', [id]);
   let docs = null; try { docs = u.docs ? JSON.parse(u.docs) : null; } catch {}
   delete u.verify_submitted_at;
+  Object.assign(u, dispPhone(u.dial, u.phone));
   res.json({ user: u, vehicle, docs, stats: { tripsCount, bookingsCount }, recentBookings, recentTrips });
 });
 
@@ -136,8 +142,9 @@ r.get('/conversations', async (_req, res) => {
   const out = [];
   for (const t of threads) {
     const last = await db.queryOne('SELECT text, mine, created_at FROM messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 1', [t.id]);
+    const ph = dispPhone(t.dial, t.phone);
     out.push({
-      userId: t.user_id, userName: t.user_name, phone: (t.dial || '') + (t.phone || ''),
+      userId: t.user_id, userName: t.user_name, phone: ph.dial + ph.phone,
       lastText: last ? last.text : '', lastAt: last ? last.created_at : null,
       needsReply: last ? !!Number(last.mine) : false, // mine=1 = رسالة من المستخدم
     });
@@ -182,7 +189,10 @@ r.get('/drivers/pending', async (_req, res) => {
      WHERE u.role='driver' AND u.verified=${PG_BOOL ? 'false' : '0'}
      ORDER BY (CASE WHEN u.verify_status='submitted' THEN 0 ELSE 1 END), u.created_at DESC`
   , []);
-  for (const r of rows) { try { r.docs = r.docs ? JSON.parse(r.docs) : null; } catch { r.docs = null; } }
+  for (const r of rows) {
+    try { r.docs = r.docs ? JSON.parse(r.docs) : null; } catch { r.docs = null; }
+    Object.assign(r, dispPhone(r.dial, r.phone));
+  }
   res.json({ drivers: rows });
 });
 
@@ -227,6 +237,7 @@ r.get('/withdrawals', async (req, res) => {
      FROM withdrawals w JOIN users u ON u.id=w.user_id
      ${status ? 'WHERE w.status=?' : ''} ORDER BY w.created_at DESC LIMIT 300`,
     [...(status ? [status] : [])]);
+  for (const w of rows) { const ph = dispPhone(w.dial, w.user_phone); w.dial = ph.dial; w.user_phone = ph.phone; }
   res.json({ withdrawals: rows });
 });
 r.patch('/withdrawals/:id', async (req, res) => {
@@ -334,10 +345,13 @@ r.patch('/countries/:code', async (req, res) => {
 r.get('/reports', async (req, res) => {
   const rows = await db.query(`SELECT rp.*, u.name reporter_name, u.dial, u.phone
     FROM reports rp JOIN users u ON u.id=rp.reporter_id ORDER BY rp.created_at DESC LIMIT 300`, []);
-  res.json({ reports: rows.map(r => ({
-    id: r.id, reporter: r.reporter_name, reporterPhone: (r.dial||'')+r.phone, reporterRole: r.reporter_role,
-    against: r.against, tripId: r.trip_id, category: r.category, note: r.note, reply: r.reply, status: r.status, at: r.created_at
-  })) });
+  res.json({ reports: rows.map(r => {
+    const ph = dispPhone(r.dial, r.phone);
+    return {
+      id: r.id, reporter: r.reporter_name, reporterPhone: ph.dial + ph.phone, reporterRole: r.reporter_role,
+      against: r.against, tripId: r.trip_id, category: r.category, note: r.note, reply: r.reply, status: r.status, at: r.created_at
+    };
+  }) });
 });
 r.patch('/reports/:id', async (req, res) => {
   const st = req.body && req.body.status;
@@ -505,7 +519,7 @@ r.get('/export/:kind', async (req, res) => {
     name = 'users';
     headers = ['المعرّف','الاسم','الجوال','الدولة','الدور','التقييم','المحفظة','الأرباح','الحالة','موثّق'];
     rows = (await db.query('SELECT id,name,dial,phone,country_code,role,rating,wallet,earnings,status,verified FROM users ORDER BY id', []))
-      .map(u => [u.id, u.name, u.dial + u.phone, u.country_code, u.role === 'driver' ? 'سائق' : 'راكب', u.rating, u.wallet, u.earnings, u.status === 'active' ? 'نشط' : 'موقوف', u.verified ? 'نعم' : 'لا']);
+      .map(u => { const ph = dispPhone(u.dial, u.phone); return [u.id, u.name, ph.dial + ph.phone, u.country_code, u.role === 'driver' ? 'سائق' : 'راكب', u.rating, u.wallet, u.earnings, u.status === 'active' ? 'نشط' : 'موقوف', u.verified ? 'نعم' : 'لا']; });
   } else if (kind === 'trips') {
     name = 'trips';
     headers = ['المعرّف','السائق','من','إلى','الوقت','سعر المقعد','المقاعد','الحالة'];

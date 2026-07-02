@@ -278,7 +278,7 @@ async function renderDashboard(c){ refreshRepBadge();
    <div class="grid g4">
      ${stat('إجمالي المستخدمين',fmt(s.users),'◉','b-blue',`${fmt(s.drivers)} سائق · ${fmt(s.passengers)} راكب`)}
      ${stat('الرحلات المكتملة',fmt(s.tripsCompleted),'🛣','b-or',`${fmt(s.tripsTotal)} رحلة إجمالاً · ${fmt(s.tripsLive)} جارية`)}
-     ${stat('عمولة المنصة','د.أ '+fmt(s.commission),'💰','b-gr',`من إيراد ${fmt(s.gross)} د.أ (${Math.round(s.commissionRate*100)}%)`)}
+     ${stat('عمولة المنصة','د.أ '+fmt(s.commission),'💰','b-gr',`من إيراد ${fmt(s.gross)} د.أ · من الرحلات المكتملة فعليًّا`)}
      ${stat('بانتظار التوثيق',fmt(s.pendingVerify),'✓','b-am',`${fmt(s.verified)} سائق موثّق`)}
    </div>
    <div class="grid g2" style="margin-top:16px">
@@ -521,6 +521,7 @@ async function doReject(id){
 }
 
 const tripTag={scheduled:['t-blue','مجدولة'],live:['t-am','جارية'],completed:['t-green','مكتملة'],cancelled:['t-red','ملغاة']};
+const REQ_STATUS={pending:'قيد الانتظار',accepted:'مقبول',rejected:'مرفوض',onboard:'على متن الرحلة',dropped:'نزل'};
 async function renderTrips(c){
   const {trips}=await apiGet('/trips');
   if(!trips.length){ c.innerHTML='<div class="empty">لا توجد رحلات منشورة بعد.</div>'; return; }
@@ -633,7 +634,7 @@ async function renderWithdrawals(c){
   const pending=all.filter(w=>w.status==='pending');
   const totalPending=pending.reduce((s,w)=>s+(+w.amount||0),0);
   const totalPaid=all.filter(w=>w.status==='paid').reduce((s,w)=>s+(+w.amount||0),0);
-  const stTag=s=>s==='paid'?'<span class="tag t-green">مدفوع</span>':s==='rejected'?'<span class="tag t-red">مرفوض</span>':'<span class="tag t-amber">معلّق</span>';
+  const stTag=s=>s==='paid'?'<span class="tag t-green">مدفوع</span>':s==='rejected'?'<span class="tag t-red">مرفوض</span>':'<span class="tag t-am">معلّق</span>';
   c.innerHTML=`
     <div class="grid g4">
       ${stat('طلبات معلّقة',fmt(pending.length),'⏳','b-am','بانتظار المعالجة')}
@@ -816,11 +817,6 @@ async function _saveAS(body,msgSel,label){
   try{ await apiSend('/app-settings','PATCH',body); if(m){ m.textContent='✓ حُفظت '+label; m.style.color='var(--green)'; } toast('✓ حُفظت '+label); }
   catch(e){ if(m){ m.textContent=e.message; m.style.color='var(--red)'; } }
 }
-async function saveAppSettings(){
-  const b={appName:$('#as_appName').value,supportEmail:$('#as_supportEmail').value,supportPhone:$('#as_supportPhone').value,minFare:$('#as_minFare').value,maxSeats:$('#as_maxSeats').value};
-  try{ await apiSend('/app-settings','PATCH',b); $('#asMsg').textContent='✓ حُفظت الإعدادات العامة'; $('#asMsg').style.color='var(--green)'; }
-  catch(e){ $('#asMsg').textContent=e.message; $('#asMsg').style.color='var(--red)'; }
-}
 async function saveDriverWelcome(){
   const b={driverWelcomeTitle:$('#as_dwTitle').value,driverWelcomeMsg:$('#as_dwMsg').value};
   try{ await apiSend('/app-settings','PATCH',b); $('#dwMsg').textContent='✓ حُفظت رسالة الترحيب'; $('#dwMsg').style.color='var(--green)'; toast('✓ حُفظت رسالة الترحيب'); }
@@ -834,11 +830,6 @@ async function saveToggles(){
   const b={maintenance:$('#as_maintenance').checked?'1':'0',allowDrivers:$('#as_allowDrivers').checked?'1':'0',showPromos:$('#as_showPromos').checked?'1':'0'};
   try{ await apiSend('/app-settings','PATCH',b); $('#tgMsg').textContent='✓ حُفظت خيارات التشغيل'; $('#tgMsg').style.color='var(--green)'; }
   catch(e){ $('#tgMsg').textContent=e.message; $('#tgMsg').style.color='var(--red)'; }
-}
-async function saveCommission(){
-  const v=+$('#crInput').value/100;
-  try{ const r=await apiSend('/settings','PATCH',{commissionRate:v}); $('#crMsg').textContent='✓ حُفظت — العمولة الآن '+Math.round(r.commissionRate*100)+'%'; $('#crMsg').style.color='var(--green)'; updateBadge(); }
-  catch(e){ $('#crMsg').textContent=e.message; $('#crMsg').style.color='var(--red)'; }
 }
 async function saveCountries(){
   const sc=[...document.querySelectorAll('#ccList input:checked')].map(i=>i.value);
@@ -1077,7 +1068,7 @@ async function renderOperations(c){
   const s=o.summary;
   c.innerHTML=`
     <div class="grid g3" style="margin-bottom:18px">
-      ${stat('رحلات نشطة',s.activeTrips,'🛣','b-bl','قيد التشغيل الآن')}
+      ${stat('رحلات نشطة',s.activeTrips,'🛣','b-blue','قيد التشغيل الآن')}
       ${stat('حجوزات حيّة',s.liveBookings,'🎫','b-or','ركّاب في رحلات')}
       ${stat('سائقون',s.onlineDrivers,'🚗','b-gr','إجمالي السائقين')}
     </div>
@@ -1087,15 +1078,15 @@ async function renderOperations(c){
     </div>
     <div class="card">
       <h3 style="font-size:15px;margin-bottom:14px">🗺 الرحلات النشطة وطلباتها</h3>
-      ${o.activeTrips.length? o.activeTrips.map(t=>`
+      ${o.activeTrips.length? o.activeTrips.map(t=>{const tg=tripTag[t.status]||['t-gray',t.status];return `
         <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
           <div class="row" style="justify-content:space-between;margin-bottom:8px">
             <b>${esc(t.driver_name||'سائق')} · ${esc(t.from_label||'')} ← ${esc(t.to_label||'')}</b>
-            <span class="tag t-bl">${esc(t.status)}</span>
+            <span class="tag ${tg[0]}">${esc(tg[1])}</span>
           </div>
           <div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(t.time||'')} · ${t.total_seats} مقاعد · ${fmt(t.price_per_seat)} لكل مقعد</div>
-          ${(t.requests||[]).length? `<div style="display:flex;flex-wrap:wrap;gap:6px">${t.requests.map(r=>`<span class="tag ${r.status==='accepted'?'t-gr':'t-am'}">${esc(r.passenger_name)} · ${esc(r.status)}</span>`).join('')}</div>`:'<div class="muted" style="font-size:12px">لا طلبات بعد</div>'}
-        </div>`).join('') : '<div class="empty">لا توجد رحلات نشطة حاليًا</div>'}
+          ${(t.requests||[]).length? `<div style="display:flex;flex-wrap:wrap;gap:6px">${t.requests.map(r=>`<span class="tag ${r.status==='accepted'?'t-green':'t-am'}">${esc(r.passenger_name)} · ${esc(REQ_STATUS[r.status]||r.status)}</span>`).join('')}</div>`:'<div class="muted" style="font-size:12px">لا طلبات بعد</div>'}
+        </div>`;}).join('') : '<div class="empty">لا توجد رحلات نشطة حاليًا</div>'}
     </div>`;
   await ensureLeaflet(); initOpsMap(o.activeTrips);
 }
@@ -1107,7 +1098,7 @@ async function renderSupport(c){
   c.innerHTML=`
     <div class="grid g3" style="margin-bottom:18px">
       ${stat('تذاكر مفتوحة',open.length,'💬','b-am','بانتظار الرد')}
-      ${stat('إجمالي التذاكر',d.tickets.length,'📨','b-bl','كل الوقت')}
+      ${stat('إجمالي التذاكر',d.tickets.length,'📨','b-blue','كل الوقت')}
       ${stat('مغلقة',d.tickets.length-open.length,'✓','b-gr','تمّت معالجتها')}
     </div>
     <div class="card">
@@ -1116,7 +1107,7 @@ async function renderSupport(c){
         <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
           <div class="row" style="justify-content:space-between;margin-bottom:6px">
             <b>${esc(t.subject)}</b>
-            <span class="tag ${t.status==='open'?'t-am':'t-gr'}">${t.status==='open'?'مفتوحة':'مغلقة'}</span>
+            <span class="tag ${t.status==='open'?'t-am':'t-green'}">${t.status==='open'?'مفتوحة':'مغلقة'}</span>
           </div>
           <div class="muted" style="font-size:12.5px;margin-bottom:4px">${esc(t.user_name||'مستخدم')}</div>
           <div style="font-size:13.5px;margin-bottom:10px">${esc(t.message)}</div>
@@ -1162,7 +1153,7 @@ async function renderPromos(c){
           <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
             <div class="row" style="justify-content:space-between;margin-bottom:6px">
               <b style="font-family:monospace;font-size:15px">${esc(p.code)}</b>
-              <span class="tag ${p.active?'t-gr':'t-am'}">${p.active?'مُفعّل':'موقوف'}</span>
+              <span class="tag ${p.active?'t-green':'t-am'}">${p.active?'مُفعّل':'موقوف'}</span>
             </div>
             <div style="font-size:13px;margin-bottom:4px">${esc(p.title)}</div>
             <div class="muted" style="font-size:12px;margin-bottom:8px">${p.discount_type==='percent'?p.discount_value+'%':fmt(p.discount_value)+' خصم'} · استُخدم ${p.used_count}${p.max_uses?'/'+p.max_uses:''}${p.country?' · '+esc(p.country):''}</div>
@@ -1201,7 +1192,7 @@ async function renderAdminNotifs(c){
         ${d.notifications.length? d.notifications.map(n=>`
           <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
             <div class="row" style="justify-content:space-between;margin-bottom:4px"><b>${esc(n.title)}</b>
-              <span class="tag t-bl">${n.audience==='all'?'الجميع':n.audience==='drivers'?'السائقون':'الركّاب'}</span></div>
+              <span class="tag t-blue">${n.audience==='all'?'الجميع':n.audience==='drivers'?'السائقون':'الركّاب'}</span></div>
             <div style="font-size:13px;margin-bottom:4px">${esc(n.body)}</div>
             <div class="muted" style="font-size:11.5px">أُرسل لـ ${n.sent_count} مستخدم</div>
           </div>`).join('') : '<div class="empty">لم تُرسل إشعارات بعد</div>'}
@@ -1237,7 +1228,7 @@ async function renderTeam(c){
           <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
             <div class="row" style="justify-content:space-between;margin-bottom:6px">
               <div><b>${esc(m.name)}</b> <span class="muted" style="font-size:12px">@${esc(m.username)}</span></div>
-              <span class="tag ${m.active?'t-gr':'t-am'}">${m.active?'نشط':'موقوف'}</span>
+              <span class="tag ${m.active?'t-green':'t-am'}">${m.active?'نشط':'موقوف'}</span>
             </div>
             <div class="muted" style="font-size:12px;margin-bottom:6px">${esc(m.role)} · ${m.permissions.length?m.permissions.map(p=>ALL_PERMS[p]||p).join('، '):'بلا صلاحيات'}</div>
             <div class="row" style="gap:6px">
@@ -1277,8 +1268,8 @@ function repCard(r){
       <div style="flex:1">
         <div class="row" style="gap:8px;align-items:center;margin-bottom:4px">
           <b style="font-size:14.5px">${esc(r.category)}</b>
-          <span class="badge ${open?'b-amber':'b-green'}">${open?'مفتوح':'مُعالَج'}</span>
-          <span class="badge b-blue">${r.reporterRole==='driver'?'سائق':'راكب'}</span>
+          <span class="tag ${open?'t-am':'t-green'}">${open?'مفتوح':'مُعالَج'}</span>
+          <span class="tag t-blue">${r.reporterRole==='driver'?'سائق':'راكب'}</span>
         </div>
         <div class="muted" style="font-size:13px;margin-bottom:3px">من: ${esc(r.reporter)} · ${esc(r.reporterPhone||'')}${r.against?' · <b style="color:var(--red)">ضد: '+esc(r.against)+'</b>':''}</div>
         ${r.note?`<div style="font-size:13px;margin:6px 0;background:var(--surface2);padding:8px 12px;border-radius:10px">${esc(r.note)}</div>`:''}
