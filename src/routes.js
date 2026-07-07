@@ -121,6 +121,15 @@ r.get('/live/:token', async (req, res) => {
   });
 });
 
+// إعدادات عامة يقرؤها التطبيق قبل تسجيل الدخول (دول الخدمة يتحكم بها المشرف + حالة بوابة الدفع)
+r.get('/config', async (_req, res) => {
+  const { paymentsEnabled } = require('./payments');
+  res.json({
+    serviceCountries: await serviceCountries(),
+    cardPayments: paymentsEnabled() && !!process.env.MOYASAR_PUBLISHABLE_KEY,
+  });
+});
+
 // كل ما يلي محمي
 r.use(authRequired);
 
@@ -231,14 +240,14 @@ r.post('/uploads', async (req, res) => {
 r.post('/me/verify-request', async (req, res) => {
   const { idNumber, birthDate, city, docs, serviceType } = req.body || {};
   const docsJson = docs && typeof docs === 'object' ? JSON.stringify(docs) : null;
-  const st = ['carpool', 'public_bus', 'school_bus'].includes(serviceType) ? serviceType : null;
+  const st = ['carpool', 'public_bus', 'school_bus', 'workers'].includes(serviceType) ? serviceType : null;
   await db.execute(`UPDATE users SET
       id_number = COALESCE(?, id_number), birth_date = COALESCE(?, birth_date),
       city = COALESCE(?, city), docs = COALESCE(?, docs), service_type = COALESCE(?, service_type), role = 'driver',
       verify_status = 'submitted', verify_submitted_at = ?
     WHERE id=?`, [idNumber ?? null, birthDate ?? null, city ?? null, docsJson, st, now(), req.user.id]);
   // أبلغ السائق أن طلبه قيد المراجعة
-  await addNotif(req.user.id, 'clock', 'amber', 'طلب التوثيق قيد المراجعة', 'سنراجع بياناتك ونعلمك بالنتيجة قريبًا');
+  await addNotif(req.user.id, 'clock', 'amber', 'طلب التوثيق قيد المراجعة', 'سنراجع بياناتك ونعلمك بالنتيجة قريبًا', '/(driver)/ddocs');
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u), verifyStatus: 'submitted' });
 });
@@ -265,6 +274,13 @@ r.post('/me/push-token', async (req, res) => {
 
 r.put('/me/vehicle', async (req, res) => {
   const { make, model, year, color, plate, capacity } = req.body || {};
+  // الحد الأدنى لموديل السيارة 2010 — سياسة جودة الأسطول
+  if (year) {
+    const y = Number(year);
+    if (!Number.isInteger(y) || y < 2010 || y > new Date().getFullYear() + 1) {
+      return bad(res, 'موديل السيارة يجب أن يكون 2010 أو أحدث');
+    }
+  }
   await db.execute(`INSERT INTO vehicles (user_id,make,model,year,color,plate,capacity) VALUES (?,?,?,?,?,?,?)
     ON CONFLICT(user_id) DO UPDATE SET make=excluded.make,model=excluded.model,year=excluded.year,
       color=excluded.color,plate=excluded.plate,capacity=excluded.capacity`, [req.user.id, make || '', model || '', year || '', color || '', plate || '', capacity || 4]);
@@ -425,9 +441,10 @@ r.post('/trips', async (req, res) => {
   if (req.user.role !== 'driver' || !req.user.verified) return bad(res, 'يجب اعتماد حسابك كسائق أولًا لنشر رحلة', 403);
   const { from, to, fromCoord, toCoord, date, time, price, seats, genderPref } = req.body || {};
   if (!from || !to || !time) return bad(res, 'الانطلاق والوجهة والوقت مطلوبة');
-  const KINDS = ['city', 'intercity', 'public_bus', 'school_bus'];
+  const KINDS = ['city', 'intercity', 'public_bus', 'school_bus', 'workers'];
   const kind = KINDS.includes(req.body?.kind) ? req.body.kind : 'city';
-  const isBus = kind === 'public_bus' || kind === 'school_bus';
+  // نقل العمال يُعامل كالحافلات: سعة كبيرة وتتبّع مباشر وسعر يبدأ من 0 (قد تتكفّل به الشركة)
+  const isBus = kind === 'public_bus' || kind === 'school_bus' || kind === 'workers';
   const p = Number(price), s = Number(seats);
   // الباصات: السعر من 0 (المدرسية مجانية للأهالي عادةً)؛ الكاربول 5–500
   if (!Number.isFinite(p) || p < (isBus ? 0 : 5) || p > 500) return bad(res, isBus ? 'سعر غير صالح (0–500)' : 'سعر المقعد غير صالح (5–500)');
@@ -514,7 +531,7 @@ async function handleRequestAction(req, res) {
     // المقاعد والمبلغ محجوزان مسبقًا — القبول يؤكّد الحجز المرتبط
     await db.execute("UPDATE requests SET status='accepted' WHERE id=?", [q.id]);
     await db.execute("UPDATE bookings SET status='confirmed' WHERE request_id=? AND status='pending_driver'", [q.id]);
-    await addNotif(req.user.id, 'check', 'green', 'قبلت طلب حجز', `${q.from_label} ← ${q.to_label}`);
+    await addNotif(req.user.id, 'check', 'green', 'قبلت طلب حجز', `${q.from_label} ← ${q.to_label}`, '/(driver)/requests');
     // أبلغ الراكب بقبول طلبه
     if (q.passenger_id) await addNotif(q.passenger_id, 'check', 'green', 'تم قبول حجزك ✓', `${q.from_label} ← ${q.to_label}`, '/(passenger)/tracking');
   } else {
@@ -530,10 +547,10 @@ async function handleRequestAction(req, res) {
         await addTxn(booking.passenger_id, 'passenger', 'استرجاع حجز مرفوض', booking.fare, 'in');
         await addNotif(booking.passenger_id, 'wallet', 'amber', 'اعتذر السائق عن طلبك وأُعيد المبلغ', `${booking.fare} ${await userCur(booking.passenger_id)} إلى محفظتك`, '/(passenger)/wallet');
       } else {
-        await addNotif(booking.passenger_id, 'x', 'red', 'اعتذر السائق عن طلبك', `${q.from_label} ← ${q.to_label}`);
+        await addNotif(booking.passenger_id, 'x', 'red', 'اعتذر السائق عن طلبك', `${q.from_label} ← ${q.to_label}`, '/(passenger)/trips');
       }
     } else if (q.passenger_id) {
-      await addNotif(q.passenger_id, 'x', 'red', 'لم يُقبل طلب حجزك', `${q.from_label} ← ${q.to_label}`);
+      await addNotif(q.passenger_id, 'x', 'red', 'لم يُقبل طلب حجزك', `${q.from_label} ← ${q.to_label}`, '/(passenger)/trips');
     }
   }
   res.json({ request: await db.queryOne('SELECT * FROM requests WHERE id=?', [q.id]) });
@@ -958,10 +975,10 @@ r.post('/ride-requests/:id/decline', async (req, res) => {
   res.json({ ok: true, status: 'cancelled' });
 });
 
-// ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية) =====
+// ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية/نقل عمال) =====
 r.get('/buses', async (req, res) => {
   const kindParam = (req.query.kind || '').toString();
-  const kinds = ['public_bus', 'school_bus'].includes(kindParam) ? [kindParam] : ['public_bus', 'school_bus'];
+  const kinds = ['public_bus', 'school_bus', 'workers'].includes(kindParam) ? [kindParam] : ['public_bus', 'school_bus', 'workers'];
   const ph = kinds.map(() => '?').join(',');
   const rows = await db.query(
     `SELECT t.id, t.from_label, t.to_label, t.from_lat, t.from_lng, t.to_lat, t.to_lng, t.time, t.kind, t.driver_lat, t.driver_lng, t.driver_loc_at, t.status,
@@ -1063,7 +1080,7 @@ r.post('/bookings', async (req, res) => {
   if (appliedPromo && discount > 0) {
     await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [appliedPromo.id]);
     await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [appliedPromo.id, req.user.id, discount, now()]);
-    await addNotif(req.user.id, 'wallet', 'green', 'طُبّق كود الخصم 🎁', `وفّرت ${discount} ${await userCur(req.user.id)} على رحلتك`);
+    await addNotif(req.user.id, 'wallet', 'green', 'طُبّق كود الخصم 🎁', `وفّرت ${discount} ${await userCur(req.user.id)} على رحلتك`, '/(passenger)/wallet');
   }
   // المبلغ محجوز (مخصوم) بانتظار موافقة السائق — يُسترجع تلقائيًا عند الرفض
   await addNotif(req.user.id, 'time', 'amber', 'تم إرسال طلبك', `بانتظار موافقة السائق · ${trip.from_label} ← ${trip.to_label}`, `/(passenger)/tracking?bookingId=${bookingId}`);
@@ -1093,7 +1110,7 @@ r.post('/bookings/:id/status', async (req, res) => {
     if (b.payment !== 'cash') {
       await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [b.fare, req.user.id]);
       await addTxn(req.user.id, 'passenger', 'استرجاع رحلة ملغاة', b.fare, 'in');
-      await addNotif(req.user.id, 'wallet', 'amber', 'أُلغيت الرحلة وأُعيد المبلغ', `${b.fare} ${await userCur(req.user.id)} إلى محفظتك`);
+      await addNotif(req.user.id, 'wallet', 'amber', 'أُلغيت الرحلة وأُعيد المبلغ', `${b.fare} ${await userCur(req.user.id)} إلى محفظتك`, '/(passenger)/wallet');
     }
     // أعد المقاعد للرحلة وحدّث الطلب المرتبط وأبلغ السائق
     if (b.request_id) {
@@ -1207,7 +1224,10 @@ r.post('/threads/:id/messages', async (req, res) => {
     const peer = await db.queryOne('SELECT role FROM users WHERE id=?', [t.peer_id]);
     const peerThread = await getOrCreateThread(t.peer_id, req.user.id, me ? me.name : 'مستخدم');
     await db.execute('INSERT INTO messages (thread_id,text,mine,created_at) VALUES (?,?,0,?)', [peerThread.id, text, now()]);
-    const route = peer && peer.role === 'driver' ? '/(driver)/dchat' : '/(passenger)/messages';
+    // رابط عميق يفتح المحادثة نفسها مباشرةً (وليس قائمة الرسائل)
+    const route = peer && peer.role === 'driver'
+      ? `/(driver)/dchat?threadId=${peerThread.id}`
+      : `/(passenger)/chat?threadId=${peerThread.id}`;
     await addNotif(t.peer_id, 'messages', 'blue', `رسالة من ${me ? me.name : 'مستخدم'}`, text.slice(0, 80), route);
   }
   const messages = await db.query('SELECT id,text,mine,created_at at FROM messages WHERE thread_id=? ORDER BY created_at ASC', [t.id]);
@@ -1262,14 +1282,18 @@ r.get('/groups/mine', async (req, res) => {
 });
 
 r.post('/groups', async (req, res) => {
-  const { name, fromLabel, fromCoord, toLabel, toCoord } = req.body || {};
+  const { name, fromLabel, fromCoord, toLabel, toCoord, weeklyPrice, monthlyPrice } = req.body || {};
   const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
   if (!name || !String(name).trim()) return bad(res, 'اسم المجموعة مطلوب');
   if (!validPt(A) || !validPt(B)) return bad(res, 'حدّد نقطة الانطلاق والوجهة');
+  // أسعار اشتراك اختيارية (0–2000) — تركها فارغة يعني لا اشتراكات لهذه المجموعة
+  const wp = Number(weeklyPrice), mp = Number(monthlyPrice);
+  const W = Number.isFinite(wp) && wp > 0 && wp <= 2000 ? round2(wp) : null;
+  const M = Number.isFinite(mp) && mp > 0 && mp <= 2000 ? round2(mp) : null;
   const joinCode = crypto.randomBytes(4).toString('hex').toUpperCase();
   const id = await insertReturningId('groups',
-    ['name', 'from_label', 'from_lat', 'from_lng', 'to_label', 'to_lat', 'to_lng', 'creator_id', 'join_code', 'created_at'],
-    [String(name).trim().slice(0, 60), String(fromLabel || 'من'), A[0], A[1], String(toLabel || 'إلى'), B[0], B[1], req.user.id, joinCode, now()]);
+    ['name', 'from_label', 'from_lat', 'from_lng', 'to_label', 'to_lat', 'to_lng', 'creator_id', 'join_code', 'weekly_price', 'monthly_price', 'created_at'],
+    [String(name).trim().slice(0, 60), String(fromLabel || 'من'), A[0], A[1], String(toLabel || 'إلى'), B[0], B[1], req.user.id, joinCode, W, M, now()]);
   await insertReturningId('group_members', ['group_id', 'user_id', 'role', 'joined_at'], [id, req.user.id, 'creator', now()]);
   res.status(201).json({ group: await db.queryOne('SELECT * FROM groups WHERE id=?', [id]) });
 });
@@ -1283,7 +1307,54 @@ r.get('/groups/:id', async (req, res) => {
     `SELECT gm.role, gm.joined_at, u.id user_id, u.name, u.role user_kind, u.rating
      FROM group_members gm JOIN users u ON u.id=gm.user_id
      WHERE gm.group_id=? ORDER BY gm.joined_at ASC`, [g.id]);
-  res.json({ group: g, members });
+  // اشتراكي الحالي في هذه المجموعة (إن وُجد وغير منتهٍ)
+  const sub = await db.queryOne(
+    'SELECT plan, price, expires_at FROM group_subscriptions WHERE group_id=? AND user_id=? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1',
+    [g.id, req.user.id, now()]);
+  res.json({ group: g, members, subscription: sub || null });
+});
+
+// اشتراك أسبوعي/شهري في المجموعة — يُخصم من محفظة العضو ويُضاف لمنشئ المجموعة
+r.post('/groups/:id/subscribe', async (req, res) => {
+  const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
+  if (!g) return bad(res, 'المجموعة غير موجودة', 404);
+  const mine = await db.queryOne('SELECT * FROM group_members WHERE group_id=? AND user_id=?', [g.id, req.user.id]);
+  if (!mine) return bad(res, 'لست عضوًا في هذه المجموعة', 403);
+  if (g.creator_id === req.user.id) return bad(res, 'أنت منشئ المجموعة — لا تحتاج اشتراكًا');
+  const plan = String(req.body?.plan || '');
+  if (!['weekly', 'monthly'].includes(plan)) return bad(res, 'خطة غير صالحة (weekly|monthly)');
+  const price = plan === 'weekly' ? Number(g.weekly_price) : Number(g.monthly_price);
+  if (!Number.isFinite(price) || price <= 0) return bad(res, 'هذه الخطة غير متاحة في المجموعة');
+  const active = await db.queryOne('SELECT id, expires_at FROM group_subscriptions WHERE group_id=? AND user_id=? AND expires_at > ?', [g.id, req.user.id, now()]);
+  if (active) return bad(res, 'لديك اشتراك فعّال في هذه المجموعة');
+  // خصم ذرّي من المحفظة (يمنع الرصيد السالب)
+  const payRes = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [price, req.user.id, price]);
+  if (!payRes.rowCount) return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك أولًا');
+  const days = plan === 'weekly' ? 7 : 30;
+  const expires = now() + days * 86400000;
+  await insertReturningId('group_subscriptions',
+    ['group_id', 'user_id', 'plan', 'price', 'started_at', 'expires_at', 'created_at'],
+    [g.id, req.user.id, plan, price, now(), expires, now()]);
+  const planAr = plan === 'weekly' ? 'أسبوعي' : 'شهري';
+  await addTxn(req.user.id, 'passenger', `اشتراك ${planAr} · ${g.name}`, price, 'out');
+  // المبلغ يذهب لمنشئ المجموعة: سائق → أرباح، راكب → محفظة
+  const creator = await db.queryOne('SELECT id, role FROM users WHERE id=?', [g.creator_id]);
+  if (creator) {
+    if (creator.role === 'driver') {
+      await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [price, creator.id]);
+      await addTxn(creator.id, 'driver', `اشتراك ${planAr} · ${g.name}`, price, 'in');
+    } else {
+      await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [price, creator.id]);
+      await addTxn(creator.id, 'passenger', `اشتراك ${planAr} · ${g.name}`, price, 'in');
+    }
+    const u = await db.queryOne('SELECT name FROM users WHERE id=?', [req.user.id]);
+    const creatorRoute = creator.role === 'driver' ? '/(driver)/dgroups' : '/(passenger)/groups';
+    await addNotif(creator.id, 'wallet', 'green', 'اشتراك جديد في مجموعتك 🎉', `${u?.name || 'عضو'} اشترك (${planAr}) في «${g.name}»`, creatorRoute);
+  }
+  const meRoute = req.user.role === 'driver' ? '/(driver)/dgroups' : '/(passenger)/groups';
+  await addNotif(req.user.id, 'check', 'green', 'تم تفعيل اشتراكك ✓', `اشتراك ${planAr} في «${g.name}»`, meRoute);
+  const wallet = round2((await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id])).wallet);
+  res.status(201).json({ subscription: { plan, price, expires_at: expires }, wallet });
 });
 
 r.post('/groups/join', async (req, res) => {

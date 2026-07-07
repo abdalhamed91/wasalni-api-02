@@ -283,6 +283,17 @@ const TABLES = [
     role TEXT NOT NULL DEFAULT 'member',
     joined_at ${NOW}
   )`,
+  // اشتراكات المجموعات (أسبوعي/شهري) — يدفع العضو من محفظته لمنشئ المجموعة
+  `CREATE TABLE IF NOT EXISTS group_subscriptions (
+    id ${ID},
+    group_id ${INT} NOT NULL,
+    user_id ${INT} NOT NULL,
+    plan TEXT NOT NULL,
+    price REAL NOT NULL,
+    started_at ${INT} NOT NULL,
+    expires_at ${INT} NOT NULL,
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
@@ -361,6 +372,9 @@ async function runMigrations() {
   await ensureColumn('ride_requests', 'offer_by', "TEXT DEFAULT ''");
   // طريقة الدفع لطلب التوصيلة: wallet أو cash (نفس نمط الحجوزات)
   await ensureColumn('ride_requests', 'payment', "TEXT DEFAULT 'wallet'");
+  // أسعار اشتراكات المجموعة (يحدّدها المنشئ — 0 أو NULL = الاشتراك غير متاح)
+  await ensureColumn('groups', 'weekly_price', 'REAL');
+  await ensureColumn('groups', 'monthly_price', 'REAL');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

@@ -26,12 +26,27 @@
   var token = location.pathname.split('/').filter(Boolean).pop();
   var map = L.map('map',{zoomControl:true,attributionControl:false}).setView([31.95,35.93],12);
   L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=ar&x={x}&y={y}&z={z}',{subdomains:['0','1','2','3'],maxZoom:20}).addTo(map);
-  var startM=null,endM=null,car=null,line=null,fitted=false;
+  var startM=null,endM=null,car=null,line=null,fitted=false,routed=false;
   function setMarkers(f,t){
     if(f&&!startM){startM=L.circleMarker(f,{radius:8,color:'#fff',weight:3,fillColor:'#1E5BC2',fillOpacity:1}).addTo(map);}
     if(t&&!endM){endM=L.circleMarker(t,{radius:8,color:'#fff',weight:3,fillColor:'#FF6320',fillOpacity:1}).addTo(map);}
     if(f&&t&&!line){line=L.polyline([f,t],{color:'#1E5BC2',weight:4,opacity:.85,dashArray:'6,8'}).addTo(map);}
     if(f&&t&&!fitted){map.fitBounds(L.latLngBounds([f,t]).pad(0.3));fitted=true;}
+    if(f&&t&&!routed){routed=true;fetchRoute(f,t);}
+  }
+  // المسار الحقيقي عبر الشوارع (OSRM) — يستبدل الخط المستقيم فور وصوله
+  function fetchRoute(f,t){
+    var url='https://router.project-osrm.org/route/v1/driving/'+f[1]+','+f[0]+';'+t[1]+','+t[0]+'?overview=full&geometries=geojson';
+    fetch(url).then(function(r){return r.json();}).then(function(d){
+      if(d&&d.routes&&d.routes[0]&&d.routes[0].geometry){
+        var coords=d.routes[0].geometry.coordinates.map(function(c){return [c[1],c[0]];});
+        if(coords.length>1&&line){
+          line.setLatLngs(coords);
+          line.setStyle({dashArray:null,weight:5,opacity:.9});
+          map.fitBounds(L.latLngBounds(coords).pad(0.15));
+        }
+      }
+    }).catch(function(){ routed=false; /* يُعاد عند الاستطلاع التالي */ });
   }
   function moveCar(p){
     if(!car){car=L.marker(p,{icon:L.divIcon({className:'',html:'<div class=car></div>',iconSize:[20,20]})}).addTo(map);map.setView(p,15);}

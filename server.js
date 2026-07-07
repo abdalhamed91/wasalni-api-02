@@ -65,6 +65,47 @@ app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'terms.html')
 // صفحة تتبّع عامة عبر رابط المشاركة (تقرأ الرمز من المسار وتستعلم /api/live/:token)
 app.get('/live/:token', (_req, res) => res.sendFile(path.join(__dirname, 'live.html')));
 
+// صفحة الدفع بالبطاقة (نموذج Moyasar) — تعمل فقط عند ضبط MOYASAR_PUBLISHABLE_KEY
+// التطبيق يفتحها بمبلغ محدّد، وعند اكتمال الدفع يعود Moyasar إلى /pay/done?id=<paymentId>
+// فيلتقط التطبيق المعرّف ويستدعي /api/wallet/topup {paymentId} الذي يتحقّق من المبلغ ويشحن المحفظة.
+app.get('/pay', (req, res) => {
+  const pk = process.env.MOYASAR_PUBLISHABLE_KEY;
+  if (!pk) return res.status(503).send('<html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:40px">بوابة الدفع غير مفعّلة حاليًا.</body></html>');
+  const amount = Math.round(Number(req.query.amount) * 100); // بالهللات/القروش
+  const currency = String(req.query.currency || 'SAR').replace(/[^A-Z]/g, '').slice(0, 3) || 'SAR';
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 500000) return res.status(400).send('مبلغ غير صالح');
+  const base = `${req.protocol}://${req.get('host')}`;
+  res.send(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>الدفع بالبطاقة — وصلني</title>
+<link rel="stylesheet" href="https://cdn.moyasar.com/mpf/1.14.0/moyasar.css"/>
+<style>body{font-family:system-ui,Tahoma,sans-serif;background:#F4F7FC;margin:0;padding:24px}
+.box{max-width:420px;margin:0 auto;background:#fff;border-radius:16px;padding:20px;box-shadow:0 4px 18px rgba(15,47,114,.08)}
+h3{color:#0F2F72;margin:0 0 14px}</style></head><body>
+<div class="box"><h3>💳 الدفع الآمن بالبطاقة</h3><div class="mysr-form"></div></div>
+<script src="https://cdn.moyasar.com/mpf/1.14.0/moyasar.js"></script>
+<script>
+Moyasar.init({
+  element: '.mysr-form',
+  amount: ${amount},
+  currency: '${currency}',
+  description: 'شحن محفظة وصلني',
+  publishable_api_key: '${pk}',
+  callback_url: '${base}/pay/done',
+  methods: ['creditcard'],
+});
+</script></body></html>`);
+});
+app.get('/pay/done', (req, res) => {
+  const ok = String(req.query.status || '') === 'paid';
+  res.send(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>نتيجة الدفع</title></head>
+<body style="font-family:system-ui,Tahoma,sans-serif;text-align:center;padding:60px 20px;background:#F4F7FC">
+<div style="font-size:44px">${ok ? '✅' : '❌'}</div>
+<h3 style="color:#0F2F72">${ok ? 'تم الدفع بنجاح' : 'لم يكتمل الدفع'}</h3>
+<p style="color:#6B7280">${ok ? 'ارجع للتطبيق لإتمام العملية.' : 'يمكنك المحاولة مرة أخرى من التطبيق.'}</p>
+</body></html>`);
+});
+
 // تحديد معدّل على النقاط الحسّاسة (مكافحة إساءة الاستخدام وتخمين كلمات المرور)
 app.use('/api/auth/otp/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
 app.use('/api/auth/otp/verify', rateLimit({ windowMs: 60000, max: 10, message: 'محاولات تحقّق كثيرة، انتظر قليلاً' }));
