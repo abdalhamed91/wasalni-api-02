@@ -1298,6 +1298,43 @@ r.post('/groups', async (req, res) => {
   res.status(201).json({ group: await db.queryOne('SELECT * FROM groups WHERE id=?', [id]) });
 });
 
+// تعديل مجموعة (منشئها فقط) — الاسم/المسار/أسعار الاشتراك، كلها اختيارية
+r.patch('/groups/:id', async (req, res) => {
+  const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
+  if (!g) return bad(res, 'المجموعة غير موجودة', 404);
+  if (g.creator_id !== req.user.id) return bad(res, 'يُسمح لمنشئ المجموعة فقط بالتعديل', 403);
+  const { name, fromLabel, fromCoord, toLabel, toCoord, weeklyPrice, monthlyPrice } = req.body || {};
+  const A = Array.isArray(fromCoord) ? fromCoord : null, B = Array.isArray(toCoord) ? toCoord : null;
+  if (fromCoord !== undefined && !validPt(A)) return bad(res, 'نقطة الانطلاق غير صالحة');
+  if (toCoord !== undefined && !validPt(B)) return bad(res, 'نقطة الوجهة غير صالحة');
+  const wp = Number(weeklyPrice), mp = Number(monthlyPrice);
+  const W = weeklyPrice === undefined ? undefined : (Number.isFinite(wp) && wp > 0 && wp <= 2000 ? round2(wp) : null);
+  const M = monthlyPrice === undefined ? undefined : (Number.isFinite(mp) && mp > 0 && mp <= 2000 ? round2(mp) : null);
+  await db.execute(`UPDATE groups SET
+      name = COALESCE(?, name),
+      from_label = COALESCE(?, from_label), from_lat = COALESCE(?, from_lat), from_lng = COALESCE(?, from_lng),
+      to_label = COALESCE(?, to_label), to_lat = COALESCE(?, to_lat), to_lng = COALESCE(?, to_lng),
+      weekly_price = ${W === undefined ? 'weekly_price' : '?'}, monthly_price = ${M === undefined ? 'monthly_price' : '?'}
+    WHERE id=?`,
+    [name && String(name).trim() ? String(name).trim().slice(0, 60) : null,
+     fromLabel ?? null, A ? A[0] : null, A ? A[1] : null,
+     toLabel ?? null, B ? B[0] : null, B ? B[1] : null,
+     ...(W === undefined ? [] : [W]), ...(M === undefined ? [] : [M]),
+     g.id]);
+  res.json({ group: await db.queryOne('SELECT * FROM groups WHERE id=?', [g.id]) });
+});
+
+// حذف مجموعة (منشئها فقط) — يُزيل الأعضاء والاشتراكات المرتبطة
+r.delete('/groups/:id', async (req, res) => {
+  const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
+  if (!g) return bad(res, 'المجموعة غير موجودة', 404);
+  if (g.creator_id !== req.user.id) return bad(res, 'يُسمح لمنشئ المجموعة فقط بالحذف', 403);
+  await db.execute('DELETE FROM group_members WHERE group_id=?', [g.id]);
+  await db.execute('DELETE FROM group_subscriptions WHERE group_id=?', [g.id]);
+  await db.execute('DELETE FROM groups WHERE id=?', [g.id]);
+  res.json({ ok: true });
+});
+
 r.get('/groups/:id', async (req, res) => {
   const g = await db.queryOne('SELECT * FROM groups WHERE id=?', [Number(req.params.id)]);
   if (!g) return bad(res, 'المجموعة غير موجودة', 404);
