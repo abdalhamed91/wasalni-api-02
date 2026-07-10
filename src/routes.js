@@ -1321,7 +1321,22 @@ r.patch('/groups/:id', async (req, res) => {
      toLabel ?? null, B ? B[0] : null, B ? B[1] : null,
      ...(W === undefined ? [] : [W]), ...(M === undefined ? [] : [M]),
      g.id]);
-  res.json({ group: await db.queryOne('SELECT * FROM groups WHERE id=?', [g.id]) });
+  const updated = await db.queryOne('SELECT * FROM groups WHERE id=?', [g.id]);
+  // إشعار الأعضاء إن تغيّر المسار فعليًا (وليس مجرّد إعادة إرسال نفس القيم)
+  const eps = 0.0001; // ~11م — يتجاهل فروقات التقريب
+  const routeChanged =
+    updated.from_label !== g.from_label || updated.to_label !== g.to_label ||
+    Math.abs(updated.from_lat - g.from_lat) > eps || Math.abs(updated.from_lng - g.from_lng) > eps ||
+    Math.abs(updated.to_lat - g.to_lat) > eps || Math.abs(updated.to_lng - g.to_lng) > eps;
+  if (routeChanged) {
+    const others = await db.query('SELECT user_id FROM group_members WHERE group_id=? AND user_id!=?', [g.id, req.user.id]);
+    for (const m of others) {
+      const u = await db.queryOne('SELECT role FROM users WHERE id=?', [m.user_id]);
+      const route = u?.role === 'driver' ? '/(driver)/dgroups' : '/(passenger)/groups';
+      await addNotif(m.user_id, 'route', 'amber', 'تحديث مسار مجموعتك', `«${updated.name}»: ${updated.from_label} ← ${updated.to_label}`, route);
+    }
+  }
+  res.json({ group: updated });
 });
 
 // حذف مجموعة (منشئها فقط) — يُزيل الأعضاء والاشتراكات المرتبطة
