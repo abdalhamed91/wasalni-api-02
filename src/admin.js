@@ -330,18 +330,19 @@ r.get('/countries', async (_req, res) => {
   const active = await serviceCountries();
   const defRate = await commissionRate();
   const out = Object.entries(known).map(([code, name]) => {
-    const c = map[code] || { profit_type:'percent', profit_value: defRate, price_per_km:1.5, km_cap:2.5, tax_rate:0, exchange_rate:1 };
+    const c = map[code] || { profit_type:'percent', profit_value: defRate, price_per_km:1.5, km_cap:2.5, tax_rate:0, exchange_rate:1, emergency_phone:'' };
     return { code, name, enabled: active.includes(code),
       profitType: c.profit_type, profitValue: c.profit_value,
       pricePerKm: c.price_per_km, kmCap: c.km_cap,
-      taxRate: c.tax_rate != null ? c.tax_rate : 0, exchangeRate: c.exchange_rate != null ? c.exchange_rate : 1 };
+      taxRate: c.tax_rate != null ? c.tax_rate : 0, exchangeRate: c.exchange_rate != null ? c.exchange_rate : 1,
+      emergencyPhone: c.emergency_phone || '' };
   });
   res.json({ countries: out });
 });
 
 r.patch('/countries/:code', async (req, res) => {
   const code = String(req.params.code).toUpperCase();
-  const { profitType, profitValue, pricePerKm, kmCap, enabled, taxRate, exchangeRate } = req.body || {};
+  const { profitType, profitValue, pricePerKm, kmCap, enabled, taxRate, exchangeRate, emergencyPhone } = req.body || {};
   if (profitType && !['percent','flat'].includes(profitType)) return bad(res, 'نوع الربح غير صالح (percent|flat)');
   if (taxRate !== undefined && (!Number.isFinite(Number(taxRate)) || Number(taxRate) < 0 || Number(taxRate) > 0.5)) return bad(res, 'الضريبة يجب أن تكون بين 0 و 50%');
   if (exchangeRate !== undefined && (!Number.isFinite(Number(exchangeRate)) || Number(exchangeRate) <= 0)) return bad(res, 'سعر الصرف غير صالح');
@@ -360,6 +361,7 @@ r.patch('/countries/:code', async (req, res) => {
   if (kmCap !== undefined) patch.km_cap = Number(kmCap);
   if (taxRate !== undefined) patch.tax_rate = Number(taxRate);
   if (exchangeRate !== undefined) patch.exchange_rate = Number(exchangeRate);
+  if (emergencyPhone !== undefined) patch.emergency_phone = String(emergencyPhone).slice(0, 20);
   if (enabled !== undefined) patch.enabled = enabled ? 1 : 0;
   const updated = await setCountrySetting(code, patch);
   // مزامنة قائمة الدول المخدومة مع علم enabled
@@ -368,18 +370,21 @@ r.patch('/countries/:code', async (req, res) => {
     if (enabled) active.add(code); else active.delete(code);
     await setConfig('service_countries', [...active].join(','));
   }
-  res.json({ country: { code, profitType: updated.profit_type, profitValue: updated.profit_value, pricePerKm: updated.price_per_km, kmCap: updated.km_cap, enabled: !!updated.enabled } });
+  res.json({ country: { code, profitType: updated.profit_type, profitValue: updated.profit_value, pricePerKm: updated.price_per_km, kmCap: updated.km_cap, enabled: !!updated.enabled, emergencyPhone: updated.emergency_phone || '' } });
 });
 
 // ---------- البلاغات ----------
 r.get('/reports', async (req, res) => {
+  // البلاغات العاجلة (طوارئ) أولًا دائمًا، ثم الأحدث
   const rows = await db.query(`SELECT rp.*, u.name reporter_name, u.dial, u.phone
-    FROM reports rp JOIN users u ON u.id=rp.reporter_id ORDER BY rp.created_at DESC LIMIT 300`, []);
+    FROM reports rp JOIN users u ON u.id=rp.reporter_id
+    ORDER BY (CASE WHEN rp.priority='urgent' AND rp.status='open' THEN 0 ELSE 1 END), rp.created_at DESC LIMIT 300`, []);
   res.json({ reports: rows.map(r => {
     const ph = dispPhone(r.dial, r.phone);
     return {
       id: r.id, reporter: r.reporter_name, reporterPhone: ph.dial + ph.phone, reporterRole: r.reporter_role,
-      against: r.against, tripId: r.trip_id, category: r.category, note: r.note, reply: r.reply, status: r.status, at: r.created_at
+      against: r.against, tripId: r.trip_id, category: r.category, note: r.note, reply: r.reply, status: r.status, at: r.created_at,
+      priority: r.priority || 'normal', lat: r.lat, lng: r.lng,
     };
   }) });
 });
@@ -438,6 +443,76 @@ r.patch('/promos/:id', async (req, res) => {
 r.delete('/promos/:id', async (req, res) => {
   await db.execute('DELETE FROM promos WHERE id=?', [req.params.id]);
   res.json({ ok: true });
+});
+
+// ============ حسابات الشركات (نقل العمال) ============
+r.get('/companies', async (_req, res) => {
+  const rows = await db.query(
+    `SELECT c.*, (SELECT COUNT(*) FROM users WHERE company_id=c.id) employee_count
+     FROM companies c ORDER BY c.created_at DESC`, []);
+  res.json({ companies: rows });
+});
+r.post('/companies', async (req, res) => {
+  const { name, contactName, contactPhone, contactEmail } = req.body || {};
+  if (!name || !String(name).trim()) return bad(res, 'اسم الشركة مطلوب');
+  const id = await insertReturningId('companies',
+    ['name', 'contact_name', 'contact_phone', 'contact_email', 'active', 'created_at'],
+    [String(name).trim().slice(0, 100), contactName || '', contactPhone || '', contactEmail || '', PG_BOOL ? true : 1, now()]);
+  res.status(201).json({ company: await db.queryOne('SELECT * FROM companies WHERE id=?', [id]) });
+});
+r.patch('/companies/:id', async (req, res) => {
+  const c = await db.queryOne('SELECT id FROM companies WHERE id=?', [Number(req.params.id)]);
+  if (!c) return bad(res, 'الشركة غير موجودة', 404);
+  const { name, contactName, contactPhone, contactEmail, active } = req.body || {};
+  await db.execute(`UPDATE companies SET
+      name=COALESCE(?,name), contact_name=COALESCE(?,contact_name),
+      contact_phone=COALESCE(?,contact_phone), contact_email=COALESCE(?,contact_email),
+      active=${active === undefined ? 'active' : '?'}
+    WHERE id=?`,
+    [name && String(name).trim() ? String(name).trim().slice(0, 100) : null, contactName ?? null, contactPhone ?? null, contactEmail ?? null,
+     ...(active === undefined ? [] : [PG_BOOL ? !!active : (active ? 1 : 0)]), c.id]);
+  res.json({ company: await db.queryOne('SELECT * FROM companies WHERE id=?', [c.id]) });
+});
+r.delete('/companies/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  await db.execute('UPDATE users SET company_id=NULL WHERE company_id=?', [id]);
+  await db.execute('DELETE FROM companies WHERE id=?', [id]);
+  res.json({ ok: true });
+});
+// موظفو الشركة
+r.get('/companies/:id/employees', async (req, res) => {
+  const rows = await db.query('SELECT id, name, dial, phone, role FROM users WHERE company_id=? ORDER BY name', [Number(req.params.id)]);
+  res.json({ employees: rows.map(u => { const ph = dispPhone(u.dial, u.phone); return { id: u.id, name: u.name, phone: ph.dial + ph.phone, role: u.role }; }) });
+});
+// إضافة موظف عبر رقم جوال (يبحث عن حساب موجود بنفس الرقم)
+r.post('/companies/:id/employees', async (req, res) => {
+  const companyId = Number(req.params.id);
+  const c = await db.queryOne('SELECT id FROM companies WHERE id=?', [companyId]);
+  if (!c) return bad(res, 'الشركة غير موجودة', 404);
+  const phone = String(req.body?.phone || '').replace(/\D/g, '');
+  if (!phone) return bad(res, 'رقم الجوال مطلوب');
+  const u = await db.queryOne('SELECT id FROM users WHERE phone=? OR phone LIKE ?', [phone, '%' + phone.slice(-9)]);
+  if (!u) return bad(res, 'لا يوجد حساب مسجّل بهذا الرقم');
+  await db.execute('UPDATE users SET company_id=? WHERE id=?', [companyId, u.id]);
+  res.status(201).json({ ok: true });
+});
+r.delete('/companies/:id/employees/:userId', async (req, res) => {
+  await db.execute('UPDATE users SET company_id=NULL WHERE id=? AND company_id=?', [Number(req.params.userId), Number(req.params.id)]);
+  res.json({ ok: true });
+});
+// تقرير استخدام شهري (لإصدار فاتورة الشركة يدويًا) — عدد الرحلات وإجمالي الأجرة لكل موظفي الشركة
+r.get('/companies/:id/report', async (req, res) => {
+  const companyId = Number(req.params.id);
+  const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : new Date().toISOString().slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const start = Date.UTC(y, m - 1, 1), end = Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1);
+  const rows = await db.query(
+    `SELECT b.id, b.fare, b.status, b.from_label, b.to_label, b.created_at, u.name passenger_name
+     FROM bookings b JOIN users u ON u.id=b.passenger_id
+     WHERE u.company_id=? AND b.created_at>=? AND b.created_at<? AND b.status!='cancelled'
+     ORDER BY b.created_at DESC`, [companyId, start, end]);
+  const totalFare = round2(rows.reduce((s, r0) => s + Number(r0.fare || 0), 0));
+  res.json({ month, tripCount: rows.length, totalFare, bookings: rows });
 });
 
 // ============ الإشعارات الإدارية (Broadcast) ============

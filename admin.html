@@ -88,6 +88,8 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
 .nav-badge{background:#EF4444;color:#fff;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-inline-start:6px}
 .rep-card{border-inline-start:3px solid #EF4444}
 .rep-card.resolved{border-inline-start-color:#22C55E;opacity:.7}
+.rep-card.urgent{border-inline-start-width:6px;background:#FEF2F2;animation:urgentPulse 1.8s infinite}
+@keyframes urgentPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.35)}50%{box-shadow:0 0 0 6px rgba(239,68,68,0)}}
 .modal-bg{position:fixed;inset:0;background:rgba(15,47,114,.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
 .modal-bg.open{display:flex}
 .modal{background:#fff;border-radius:18px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)}
@@ -143,6 +145,7 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
   <div class="nav-item" data-page="finance"><span class="ic">💰</span> المالية</div>
   <div class="nav-item" data-page="withdrawals"><span class="ic">🏦</span> السحوبات <span id="wdBadge" class="nav-badge" style="display:none"></span></div>
   <div class="nav-item" data-page="countries"><span class="ic">🌍</span> الدول والتسعير</div>
+  <div class="nav-item" data-page="companies"><span class="ic">🏢</span> حسابات الشركات</div>
   <div class="nav-item" data-page="team"><span class="ic">👥</span> الأدوار والصلاحيات</div>
   <div class="nav-item" data-page="settings"><span class="ic">⚙</span> الإعدادات</div>
   <div class="spacer" style="flex:1"></div>
@@ -205,7 +208,7 @@ function bindNav(){ document.querySelectorAll('.nav-item[data-page]').forEach(el
 function go(page){
   S.page=page;
   document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));
-  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
+  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',companies:'حسابات الشركات',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
   $('#pageTitle').textContent=titles[page]||page;
   render();
 }
@@ -221,7 +224,7 @@ async function render(){
     verify:renderVerify,trips:renderTrips,bookings:renderBookings,finance:renderFinance,
     withdrawals:renderWithdrawals,reports:renderReports,support:renderSupport,
     conversations:renderConversations,promos:renderPromos,notifications:renderAdminNotifs,
-    countries:renderCountries,team:renderTeam,settings:renderSettings};
+    countries:renderCountries,companies:renderCompanies,team:renderTeam,settings:renderSettings};
   try{
     const fn=map[S.page];
     if(fn){ await fn(c); enhanceTables(); }       // محرّك الفرز العالمي بعد كل رسم
@@ -1012,6 +1015,11 @@ function countryCard(c){
         <input id="fx-${c.code}" type="number" step="0.0001" min="0" value="${c.exchangeRate||1}"></div>
     </div>
 
+    <div class="field" style="margin-bottom:14px">
+      <label>🆘 رقم الطوارئ المحلي (يظهر لزر SOS في التطبيق)</label>
+      <input id="emg-${c.code}" type="tel" placeholder="مثال: 911" value="${esc(c.emergencyPhone||'')}">
+    </div>
+
     <div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12.5px;line-height:1.9">
       <b style="color:var(--navy)">📐 نظام الحساب لهذه الدولة:</b><br>
       • سعر المقعد = سعر/كم (${c.pricePerKm} ${cur}) × المسافة، بسقف ${c.kmCap} ${cur}/كم<br>
@@ -1066,6 +1074,7 @@ async function saveCountryFull(code){
     kmCap: parseFloat(document.getElementById('cap-'+code).value)||0,
     taxRate: (parseFloat(document.getElementById('tax-'+code).value)||0)/100,
     exchangeRate: parseFloat(document.getElementById('fx-'+code).value)||1,
+    emergencyPhone: (document.getElementById('emg-'+code).value||'').trim(),
   };
   const msg=document.getElementById('ccmsg-'+code);
   try{
@@ -1210,6 +1219,104 @@ async function createPromo(){
 async function togglePromo(id,active){ try{ await apiSend('/promos/'+id,'PATCH',{active:active==='true'||active===true}); render(); }catch(e){ toast(e.message); } }
 async function delPromo(id){ try{ await apiSend('/promos/'+id,'DELETE'); toast('حُذف العرض'); render(); }catch(e){ toast(e.message); } }
 
+// ============ حسابات الشركات (نقل العمال) ============
+async function renderCompanies(c){
+  const { companies } = await apiGet('/companies');
+  window._companies = companies;
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:18px">
+      <h3 style="font-size:15px;margin-bottom:14px">🏢 إنشاء حساب شركة جديد</h3>
+      <div class="row" style="gap:10px;flex-wrap:wrap">
+        <div class="field" style="flex:2;min-width:180px"><label>اسم الشركة</label><input id="co_name" placeholder="مثال: مصنع الأمل"></div>
+        <div class="field" style="flex:1;min-width:140px"><label>اسم المسؤول</label><input id="co_cname" placeholder="اختياري"></div>
+        <div class="field" style="flex:1;min-width:140px"><label>جوال المسؤول</label><input id="co_cphone" placeholder="اختياري" dir="ltr"></div>
+        <div class="field" style="flex:1;min-width:160px"><label>بريد المسؤول</label><input id="co_cemail" placeholder="اختياري" dir="ltr"></div>
+      </div>
+      <button class="btn btn-pri" onclick="createCompany()">إنشاء الشركة</button>
+    </div>
+    <div class="grid g2">
+      ${companies.length ? companies.map(companyCard).join('') : '<div class="empty">لا توجد شركات مسجّلة بعد</div>'}
+    </div>`;
+}
+function companyCard(co){
+  return `<div class="card">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+      <div>
+        <b style="font-size:15px">${esc(co.name)}</b>
+        <div class="muted" style="font-size:12px;margin-top:2px">${esc(co.contact_name||'—')}${co.contact_phone?' · '+esc(co.contact_phone):''}</div>
+      </div>
+      <span class="tag ${co.active?'t-green':'t-gray'}">${co.active?'نشطة':'موقوفة'}</span>
+    </div>
+    <div class="row" style="gap:6px;align-items:center;margin-bottom:12px">
+      <span class="muted" style="font-size:12.5px">👥 ${fmt(co.employee_count)} موظف</span>
+    </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <button class="btn btn-gh" onclick="openEmployees(${co.id})">الموظفون</button>
+      <button class="btn btn-gh" onclick="openCompanyReport(${co.id})">تقرير الاستخدام</button>
+      <button class="btn btn-gh" onclick="toggleCompany(${co.id},${co.active?'false':'true'})">${co.active?'إيقاف':'تفعيل'}</button>
+      <button class="btn btn-gh" style="color:var(--red)" onclick="delCompany(${co.id})">حذف</button>
+    </div>
+  </div>`;
+}
+async function createCompany(){
+  const b={name:$('#co_name').value.trim(),contactName:$('#co_cname').value.trim(),contactPhone:$('#co_cphone').value.trim(),contactEmail:$('#co_cemail').value.trim()};
+  if(!b.name){ toast('اسم الشركة مطلوب'); return; }
+  try{ await apiSend('/companies','POST',b); toast('✓ أُنشئت الشركة'); render(); }
+  catch(e){ toast(e.message); }
+}
+async function toggleCompany(id,active){ try{ await apiSend('/companies/'+id,'PATCH',{active:active==='true'||active===true}); render(); }catch(e){ toast(e.message); } }
+async function delCompany(id){
+  if(!confirm('حذف هذه الشركة؟ سيُفصل جميع الموظفين عنها (حساباتهم تبقى كما هي).')) return;
+  try{ await apiSend('/companies/'+id,'DELETE'); toast('حُذفت الشركة'); render(); }catch(e){ toast(e.message); }
+}
+async function openEmployees(id){
+  const co=(window._companies||[]).find(x=>x.id===id);
+  const { employees } = await apiGet('/companies/'+id+'/employees');
+  openModal('موظفو '+(co?co.name:''), `
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <input id="emp_phone" placeholder="رقم جوال موظف مسجّل بالتطبيق" dir="ltr" style="flex:1;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+      <button class="btn btn-pri" onclick="addEmployee(${id})">إضافة</button>
+    </div>
+    <div id="empList">${employees.length? employees.map(e=>`
+      <div class="row" style="justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)">
+        <div><b style="font-size:13.5px">${esc(e.name)}</b> <span class="muted" style="font-size:12px">${esc(e.phone)}</span> <span class="tag ${e.role==='driver'?'t-blue':'t-gray'}" style="margin-inline-start:6px">${e.role==='driver'?'سائق':'راكب'}</span></div>
+        <button class="btn btn-gh" style="color:var(--red)" onclick="removeEmployee(${id},${e.id})">إزالة</button>
+      </div>`).join('') : '<div class="muted" style="padding:10px 0">لا يوجد موظفون بعد</div>'}</div>
+  `);
+}
+async function addEmployee(companyId){
+  const phone=$('#emp_phone').value.trim();
+  if(!phone){ toast('أدخل رقم الجوال'); return; }
+  try{ await apiSend('/companies/'+companyId+'/employees','POST',{phone}); toast('✓ أُضيف الموظف'); openEmployees(companyId); render(); }
+  catch(e){ toast(e.message); }
+}
+async function removeEmployee(companyId,userId){
+  try{ await apiSend('/companies/'+companyId+'/employees/'+userId,'DELETE'); toast('أُزيل الموظف'); openEmployees(companyId); render(); }
+  catch(e){ toast(e.message); }
+}
+async function openCompanyReport(id,month){
+  const co=(window._companies||[]).find(x=>x.id===id);
+  const m = month || new Date().toISOString().slice(0,7);
+  const r = await apiGet('/companies/'+id+'/report?month='+m);
+  openModal('تقرير استخدام '+(co?co.name:''), `
+    <div class="row" style="gap:8px;margin-bottom:14px;align-items:center">
+      <label class="muted" style="font-size:12.5px">الشهر</label>
+      <input id="rep_month" type="month" value="${m}" style="padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit" onchange="openCompanyReport(${id},this.value)">
+    </div>
+    <div class="grid g2" style="margin-bottom:14px">
+      ${stat('عدد الرحلات', r.tripCount, '🛣', 'b-blue')}
+      ${stat('إجمالي المستحقّ', fmt(r.totalFare), '💰', 'b-gr')}
+    </div>
+    <div style="max-height:280px;overflow:auto">
+      ${r.bookings.length? r.bookings.map(b0=>`
+        <div class="row" style="justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px">
+          <span>${esc(b0.passenger_name)} · ${esc(b0.from_label)} ← ${esc(b0.to_label)}</span>
+          <b>${fmt(b0.fare)}</b>
+        </div>`).join('') : '<div class="muted" style="padding:10px 0">لا رحلات في هذا الشهر</div>'}
+    </div>
+  `);
+}
+
 // ============ الإشعارات الإدارية ============
 async function renderAdminNotifs(c){
   const d=await apiGet('/notifications');
@@ -1299,16 +1406,21 @@ async function renderReports(c){
 function repCard(r){
   const when = new Date(r.at).toLocaleString('ar');
   const open = r.status==='open';
-  return `<div class="card rep-card ${open?'':'resolved'}" style="margin-bottom:12px">
+  const urgent = r.priority==='urgent' && open;
+  const mapLink = (r.lat!=null && r.lng!=null) ? `https://www.google.com/maps?q=${r.lat},${r.lng}` : null;
+  return `<div class="card rep-card ${urgent?'urgent':(open?'':'resolved')}" style="margin-bottom:12px">
     <div class="row" style="align-items:flex-start">
       <div style="flex:1">
         <div class="row" style="gap:8px;align-items:center;margin-bottom:4px">
+          ${urgent?'<span style="font-size:16px">🆘</span>':''}
           <b style="font-size:14.5px">${esc(r.category)}</b>
           <span class="tag ${open?'t-am':'t-green'}">${open?'مفتوح':'مُعالَج'}</span>
           <span class="tag t-blue">${r.reporterRole==='driver'?'سائق':'راكب'}</span>
+          ${urgent?'<span class="tag t-red">عاجل</span>':''}
         </div>
         <div class="muted" style="font-size:13px;margin-bottom:3px">من: ${esc(r.reporter)} · ${esc(r.reporterPhone||'')}${r.against?' · <b style="color:var(--red)">ضد: '+esc(r.against)+'</b>':''}</div>
         ${r.note?`<div style="font-size:13px;margin:6px 0;background:var(--surface2);padding:8px 12px;border-radius:10px">${esc(r.note)}</div>`:''}
+        ${mapLink?`<a href="${mapLink}" target="_blank" style="font-size:12.5px;color:var(--red);font-weight:700">📍 عرض موقع المُبلِّغ وقت البلاغ على الخريطة</a>`:''}
         ${r.reply?`<div style="font-size:13px;margin:6px 0;background:#E8F5EE;padding:8px 12px;border-radius:10px"><b>ردّ الإدارة:</b> ${esc(r.reply)}</div>`:''}
         <div class="muted" style="font-size:11.5px">${when}${r.tripId?' · رحلة #'+r.tripId:''}</div>
       </div>

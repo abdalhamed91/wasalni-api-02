@@ -55,7 +55,7 @@ async function serviceCountries() { return (await getConfig('service_countries',
 async function countrySetting(code) {
   const row = await db.queryOne('SELECT * FROM country_settings WHERE code=?', [code]);
   if (row) return row;
-  return { code, profit_type: 'percent', profit_value: await commissionRate(), price_per_km: 1.5, km_cap: 2.5, enabled: 1 };
+  return { code, profit_type: 'percent', profit_value: await commissionRate(), price_per_km: 1.5, km_cap: 2.5, enabled: 1, emergency_phone: '' };
 }
 async function platformProfit(code, gross) {
   const c = await countrySetting(code);
@@ -74,14 +74,15 @@ async function setCountrySetting(code, patch) {
   const enabledVal = db.kind === 'postgres' ? !!next.enabled : (next.enabled ? 1 : 0);
   const taxVal = Number(next.tax_rate != null ? next.tax_rate : 0);
   const fxVal = Number(next.exchange_rate != null ? next.exchange_rate : 1);
+  const emergencyPhone = String(next.emergency_phone || '');
   const ex = db.kind === 'postgres' ? 'EXCLUDED' : 'excluded';
   await db.execute(
-    `INSERT INTO country_settings (code,profit_type,profit_value,price_per_km,km_cap,enabled,tax_rate,exchange_rate)
-     VALUES (?,?,?,?,?,?,?,?)
+    `INSERT INTO country_settings (code,profit_type,profit_value,price_per_km,km_cap,enabled,tax_rate,exchange_rate,emergency_phone)
+     VALUES (?,?,?,?,?,?,?,?,?)
      ON CONFLICT(code) DO UPDATE SET profit_type=${ex}.profit_type, profit_value=${ex}.profit_value,
        price_per_km=${ex}.price_per_km, km_cap=${ex}.km_cap, enabled=${ex}.enabled,
-       tax_rate=${ex}.tax_rate, exchange_rate=${ex}.exchange_rate`,
-    [code, next.profit_type, Number(next.profit_value), Number(next.price_per_km), Number(next.km_cap), enabledVal, taxVal, fxVal]
+       tax_rate=${ex}.tax_rate, exchange_rate=${ex}.exchange_rate, emergency_phone=${ex}.emergency_phone`,
+    [code, next.profit_type, Number(next.profit_value), Number(next.price_per_km), Number(next.km_cap), enabledVal, taxVal, fxVal, emergencyPhone]
   );
   return countrySetting(code);
 }

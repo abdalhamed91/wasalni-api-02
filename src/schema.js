@@ -294,6 +294,49 @@ const TABLES = [
     expires_at ${INT} NOT NULL,
     created_at ${NOW}
   )`,
+  // قوالب رحلات متكرّرة — السائق يحدّد أيام الأسبوع، مهمة يومية تنشر رحلة فعلية تلقائيًا
+  `CREATE TABLE IF NOT EXISTS recurring_trips (
+    id ${ID},
+    driver_id ${INT} NOT NULL,
+    from_label TEXT, from_lat REAL, from_lng REAL,
+    to_label TEXT, to_lat REAL, to_lng REAL,
+    time TEXT NOT NULL,
+    price_per_seat REAL NOT NULL,
+    total_seats ${INT} NOT NULL,
+    gender_pref TEXT DEFAULT 'any',
+    kind TEXT NOT NULL DEFAULT 'city',
+    days TEXT NOT NULL,
+    active ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'},
+    last_run_date TEXT,
+    created_at ${NOW}
+  )`,
+  // السائقون المفضّلون لدى الراكب
+  `CREATE TABLE IF NOT EXISTS favorite_drivers (
+    id ${ID},
+    passenger_id ${INT} NOT NULL,
+    driver_id ${INT} NOT NULL,
+    created_at ${NOW},
+    UNIQUE(passenger_id, driver_id)
+  )`,
+  // حسابات الشركات (نقل العمال) — لإصدار تقرير استخدام شهري
+  `CREATE TABLE IF NOT EXISTS companies (
+    id ${ID},
+    name TEXT NOT NULL,
+    contact_name TEXT DEFAULT '',
+    contact_phone TEXT DEFAULT '',
+    contact_email TEXT DEFAULT '',
+    active ${BOOL} NOT NULL DEFAULT ${PG ? 'true' : '1'},
+    created_at ${NOW}
+  )`,
+  // تنبيه توفّر رحلة (قائمة انتظار) — يُحذف فور إشعار الراكب مرّة واحدة
+  `CREATE TABLE IF NOT EXISTS route_alerts (
+    id ${ID},
+    passenger_id ${INT} NOT NULL,
+    to_label TEXT,
+    to_lat REAL NOT NULL, to_lng REAL NOT NULL,
+    from_lat REAL, from_lng REAL,
+    created_at ${NOW}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
@@ -375,6 +418,14 @@ async function runMigrations() {
   // أسعار اشتراكات المجموعة (يحدّدها المنشئ — 0 أو NULL = الاشتراك غير متاح)
   await ensureColumn('groups', 'weekly_price', 'REAL');
   await ensureColumn('groups', 'monthly_price', 'REAL');
+  // أولوية البلاغ (طوارئ) + موقع مُرسل البلاغ وقت الإرسال
+  await ensureColumn('reports', 'priority', "TEXT NOT NULL DEFAULT 'normal'");
+  await ensureColumn('reports', 'lat', 'REAL');
+  await ensureColumn('reports', 'lng', 'REAL');
+  // ربط المستخدم بحساب شركة (نقل عمال) — لتقرير الاستخدام الشهري
+  await ensureColumn('users', 'company_id', PG ? 'BIGINT' : 'INTEGER');
+  // رقم الطوارئ المحلي لكل دولة (يضبطه المشرف) — يظهر لزر SOS بدل تخمين رقم قد يكون خاطئًا
+  await ensureColumn('country_settings', 'emergency_phone', "TEXT DEFAULT ''");
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
@@ -390,6 +441,11 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id)',
   'CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawals(user_id)',
   'CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status)',
+  'CREATE INDEX IF NOT EXISTS idx_recurring_driver ON recurring_trips(driver_id)',
+  'CREATE INDEX IF NOT EXISTS idx_recurring_active ON recurring_trips(active)',
+  'CREATE INDEX IF NOT EXISTS idx_favorites_passenger ON favorite_drivers(passenger_id)',
+  'CREATE INDEX IF NOT EXISTS idx_route_alerts_to ON route_alerts(to_lat, to_lng)',
+  'CREATE INDEX IF NOT EXISTS idx_reports_priority ON reports(priority)',
 ];
 
 async function initSchema() {

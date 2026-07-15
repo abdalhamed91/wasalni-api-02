@@ -131,9 +131,11 @@ const PORT = process.env.PORT || 4000;
 // (تفادي حلقة الانهيار على Railway — يبقى /health يعمل ويظهر السبب في السجلّ)
 const { initDb } = require('./src/db');
 const { startDocExpiryJob } = require('./src/docexpiry');
+const { startRecurringJob } = require('./src/recurring');
 function listen() {
   app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`));
   try { startDocExpiryJob(); } catch (e) { console.error('docExpiry job:', e && e.message); }
+  try { startRecurringJob(); } catch (e) { console.error('recurring job:', e && e.message); }
 }
 initDb()
   .then(listen)

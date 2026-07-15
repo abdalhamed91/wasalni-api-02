@@ -9,6 +9,8 @@ try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const { db, now, round2, insertReturningId, addTxn, addNotif, COMMISSION_RATE, SERVICE_COUNTRIES, commissionRate, serviceCountries, platformProfit, seatPriceForDistance, countrySetting } = require('./db');
 const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin } = require('./auth');
 const { paymentsEnabled, verifyPayment } = require('./payments');
+const { publishFromTemplate, todayStr, dow } = require('./recurring');
+const { notifyRouteAlerts } = require('./alerts');
 
 const r = express.Router();
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
@@ -148,6 +150,7 @@ r.get('/me', async (req, res) => {
     user: await publicUser(req.user),
     taxRate: cs && cs.tax_rate != null ? Number(cs.tax_rate) : 0,
     exchangeRate: cs && cs.exchange_rate != null ? Number(cs.exchange_rate) : 1,
+    emergencyPhone: (cs && cs.emergency_phone) || '',
     currency: curSym(req.user.country_code),
     driverWelcome,
     homeGreeting,
@@ -439,26 +442,71 @@ r.get('/trips', async (req, res) => {
 r.post('/trips', async (req, res) => {
   // نشر رحلة يتطلّب سائقًا معتمَدًا من الإدارة — يمنع أي حساب (راكب لم يسجّل كسائق) من الظهور كسائق
   if (req.user.role !== 'driver' || !req.user.verified) return bad(res, 'يجب اعتماد حسابك كسائق أولًا لنشر رحلة', 403);
-  const { from, to, fromCoord, toCoord, date, time, price, seats, genderPref } = req.body || {};
+  const { from, to, fromCoord, toCoord, date, time } = req.body || {};
   if (!from || !to || !time) return bad(res, 'الانطلاق والوجهة والوقت مطلوبة');
-  const KINDS = ['city', 'intercity', 'public_bus', 'school_bus', 'workers'];
-  const kind = KINDS.includes(req.body?.kind) ? req.body.kind : 'city';
-  // نقل العمال يُعامل كالحافلات: سعة كبيرة وتتبّع مباشر وسعر يبدأ من 0 (قد تتكفّل به الشركة)
-  const isBus = kind === 'public_bus' || kind === 'school_bus' || kind === 'workers';
-  const p = Number(price), s = Number(seats);
-  // الباصات: السعر من 0 (المدرسية مجانية للأهالي عادةً)؛ الكاربول 5–500
-  if (!Number.isFinite(p) || p < (isBus ? 0 : 5) || p > 500) return bad(res, isBus ? 'سعر غير صالح (0–500)' : 'سعر المقعد غير صالح (5–500)');
-  const cap = isBus ? 60 : ((await db.queryOne('SELECT capacity FROM vehicles WHERE user_id=?', [req.user.id]) || {}).capacity || 4);
-  if (!Number.isInteger(s) || s < 1 || s > cap) return bad(res, `عدد المقاعد يجب أن يكون 1–${cap}`);
-
-  const gp = genderPref === 'female' ? 'female' : 'any';
+  const v = await validateTripFields(req.user.id, req.body);
+  if (v.error) return bad(res, v.error);
   const tripId = await insertReturningId('trips',
     ['driver_id', 'from_label', 'to_label', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'date', 'time', 'price_per_seat', 'total_seats', 'gender_pref', 'kind', 'status', 'created_at'],
-    [req.user.id, from, to, fromCoord?.[0] ?? null, fromCoord?.[1] ?? null, toCoord?.[0] ?? null, toCoord?.[1] ?? null, date || 'اليوم', time, p, s, gp, kind, 'scheduled', now()]);
+    [req.user.id, from, to, fromCoord?.[0] ?? null, fromCoord?.[1] ?? null, toCoord?.[0] ?? null, toCoord?.[1] ?? null, date || 'اليوم', time, v.p, v.s, v.gp, v.kind, 'scheduled', now()]);
 
   const trip = await db.queryOne('SELECT * FROM trips WHERE id=?', [tripId]);
   trip.requests = [];
+  notifyRouteAlerts(trip); // بلا انتظار — لا يؤخّر استجابة النشر
   res.status(201).json({ trip });
+});
+
+// يتحقّق من حقول السعر/المقاعد/النوع المشتركة بين نشر رحلة فورية والقالب المتكرّر
+async function validateTripFields(userId, body) {
+  const KINDS = ['city', 'intercity', 'public_bus', 'school_bus', 'workers'];
+  const kind = KINDS.includes(body?.kind) ? body.kind : 'city';
+  const isBus = kind === 'public_bus' || kind === 'school_bus' || kind === 'workers';
+  const p = Number(body.price), s = Number(body.seats);
+  if (!Number.isFinite(p) || p < (isBus ? 0 : 5) || p > 500) return { error: isBus ? 'سعر غير صالح (0–500)' : 'سعر المقعد غير صالح (5–500)' };
+  const cap = isBus ? 60 : ((await db.queryOne('SELECT capacity FROM vehicles WHERE user_id=?', [userId])) || {}).capacity || 4;
+  if (!Number.isInteger(s) || s < 1 || s > cap) return { error: `عدد المقاعد يجب أن يكون 1–${cap}` };
+  const gp = body.genderPref === 'female' ? 'female' : 'any';
+  return { p, s, kind, gp };
+}
+
+// ============ الرحلات المتكرّرة (سائق) — قالب ينشر رحلة فعلية تلقائيًا كل يوم مطابق ============
+r.get('/recurring-trips/mine', async (req, res) => {
+  res.json({ recurringTrips: await db.query('SELECT * FROM recurring_trips WHERE driver_id=? ORDER BY created_at DESC', [req.user.id]) });
+});
+
+r.post('/recurring-trips', async (req, res) => {
+  if (req.user.role !== 'driver' || !req.user.verified) return bad(res, 'يجب اعتماد حسابك كسائق أولًا', 403);
+  const { from, to, fromCoord, toCoord, time } = req.body || {};
+  if (!from || !to || !time) return bad(res, 'الانطلاق والوجهة والوقت مطلوبة');
+  const days = Array.isArray(req.body?.days) ? req.body.days.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6) : [];
+  if (!days.length) return bad(res, 'اختر يومًا واحدًا على الأقل');
+  const v = await validateTripFields(req.user.id, req.body);
+  if (v.error) return bad(res, v.error);
+  const id = await insertReturningId('recurring_trips',
+    ['driver_id', 'from_label', 'from_lat', 'from_lng', 'to_label', 'to_lat', 'to_lng', 'time', 'price_per_seat', 'total_seats', 'gender_pref', 'kind', 'days', 'active', 'created_at'],
+    [req.user.id, from, fromCoord?.[0] ?? null, fromCoord?.[1] ?? null, to, toCoord?.[0] ?? null, toCoord?.[1] ?? null, time, v.p, v.s, v.gp, v.kind, [...new Set(days)].sort().join(','), 1, now()]);
+  const rt = await db.queryOne('SELECT * FROM recurring_trips WHERE id=?', [id]);
+  // إن كان اليوم ضمن الأيام المختارة، انشر رحلة اليوم فورًا بدل الانتظار للمهمّة الدورية
+  if (days.includes(dow())) await publishFromTemplate(rt, todayStr());
+  res.status(201).json({ recurringTrip: await db.queryOne('SELECT * FROM recurring_trips WHERE id=?', [id]) });
+});
+
+r.patch('/recurring-trips/:id', async (req, res) => {
+  const rt = await db.queryOne('SELECT * FROM recurring_trips WHERE id=?', [Number(req.params.id)]);
+  if (!rt) return bad(res, 'القالب غير موجود', 404);
+  if (rt.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  if (req.body?.active !== undefined) {
+    await db.execute('UPDATE recurring_trips SET active=? WHERE id=?', [req.body.active ? 1 : 0, rt.id]);
+  }
+  res.json({ recurringTrip: await db.queryOne('SELECT * FROM recurring_trips WHERE id=?', [rt.id]) });
+});
+
+r.delete('/recurring-trips/:id', async (req, res) => {
+  const rt = await db.queryOne('SELECT * FROM recurring_trips WHERE id=?', [Number(req.params.id)]);
+  if (!rt) return bad(res, 'القالب غير موجود', 404);
+  if (rt.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
+  await db.execute('DELETE FROM recurring_trips WHERE id=?', [rt.id]);
+  res.json({ ok: true });
 });
 
 async function ownTrip(req, res) {
@@ -688,6 +736,17 @@ r.post('/reports', async (req, res) => {
   res.status(201).json({ ok: true, id: reportId });
 });
 
+// زر الطوارئ (SOS) أثناء الرحلة — بلاغ فوري بأولوية عاجلة مع الموقع اللحظي، يظهر أول قائمة بلاغات الإدارة
+r.post('/sos', async (req, res) => {
+  const { tripId, lat, lng } = req.body || {};
+  const P = validPt([lat, lng]) ? [lat, lng] : null;
+  const u = await db.queryOne('SELECT role, name FROM users WHERE id=?', [req.user.id]) || {};
+  const reportId = await insertReturningId('reports',
+    ['reporter_id', 'reporter_role', 'trip_id', 'category', 'note', 'status', 'priority', 'lat', 'lng', 'created_at'],
+    [req.user.id, u.role || 'passenger', tripId || null, '🆘 طوارئ', 'ضغط زر الطوارئ أثناء الرحلة', 'open', 'urgent', P ? P[0] : null, P ? P[1] : null, now()]);
+  res.status(201).json({ ok: true, id: reportId });
+});
+
 // ============ تذاكر الدعم (من التطبيق → قسم الدعم بالإدارة، لا الرسائل) ============
 r.post('/support', async (req, res) => {
   const subject = String(req.body?.subject || '').trim().slice(0, 120);
@@ -778,10 +837,35 @@ r.get('/rides/search', async (req, res) => {
     trips.sort((a, b) => (matchInfo.get(a.id)?.detourKm ?? 999) - (matchInfo.get(b.id)?.detourKm ?? 999));
   }
 
+  // السائقون المفضّلون لدى الراكب يظهرون أولًا (يحافظ على الترتيب داخل كل مجموعة)
+  const favRows = await db.query('SELECT driver_id FROM favorite_drivers WHERE passenger_id=?', [req.user.id]);
+  const favSet = new Set(favRows.map(r0 => r0.driver_id));
+  if (favSet.size) trips = [...trips.filter(t => favSet.has(t.driver_id)), ...trips.filter(t => !favSet.has(t.driver_id))];
+
+  // أبرز ما قاله الركّاب عن كل سائق (من وسوم التقييمات) — استعلام واحد لكل السائقين الظاهرين
+  const driverIds = [...new Set(trips.map(t => t.driver_id))];
+  const topTagsByDriver = new Map();
+  if (driverIds.length) {
+    const ph = driverIds.map(() => '?').join(',');
+    const revs = await db.query(`SELECT target_id, tags FROM reviews WHERE target_id IN (${ph}) AND tags IS NOT NULL AND stars>=4 ORDER BY created_at DESC LIMIT 500`, driverIds);
+    const counts = new Map(); // driverId -> Map(tag -> count)
+    for (const r0 of revs) {
+      let arr; try { arr = JSON.parse(r0.tags); } catch { continue; }
+      if (!Array.isArray(arr)) continue;
+      const m = counts.get(r0.target_id) || new Map();
+      for (const tag of arr) m.set(tag, (m.get(tag) || 0) + 1);
+      counts.set(r0.target_id, m);
+    }
+    for (const [driverId, m] of counts) topTagsByDriver.set(driverId, [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([tag]) => tag));
+  }
+
   const rides = trips.map(t => {
     const mi = matchInfo.get(t.id);
     return {
       id: t.id,
+      driverId: t.driver_id,
+      isFavorite: favSet.has(t.driver_id),
+      topTags: topTagsByDriver.get(t.driver_id) || [],
       driver: t.driver_name || 'سائق',
       rating: t.driver_rating || 5,
       ratingCount: Number(t.driver_rating_count) || 0,
@@ -794,16 +878,39 @@ r.get('/rides/search', async (req, res) => {
       kind: t.kind || 'city',
       driverGender: t.driver_gender || 'male',
       femaleOnly: t.gender_pref === 'female',
-      // معلومات المطابقة على المسار (نزول مبكر)
+      // معلومات المطابقة على المسار (نزول مبكر) — iO/iD غير متوفّرين إلا في مطابقة الممرّ الكاملة
       ...(mi ? {
         alongRoute: true,
-        boardNear: mi.iO.t < 0.08 ? t.from_label : 'على المسار قرب موقعك',
-        dropNear: mi.iD.t > 0.92 ? t.to_label : 'قبل وجهة السائق — على مسارك',
+        boardNear: mi.iO ? (mi.iO.t < 0.08 ? t.from_label : 'على المسار قرب موقعك') : t.from_label,
+        dropNear: mi.iD ? (mi.iD.t > 0.92 ? t.to_label : 'قبل وجهة السائق — على مسارك') : t.to_label,
         detourKm: mi.detourKm,
       } : {}),
     };
   });
   res.json({ rides });
+});
+
+// ============ قائمة انتظار المسارات — "نبّهني عند توفر رحلة" ============
+r.post('/route-alerts', async (req, res) => {
+  const { toLabel, toCoord, fromCoord } = req.body || {};
+  const B = Array.isArray(toCoord) ? toCoord : null;
+  if (!validPt(B)) return bad(res, 'حدّد الوجهة');
+  const A = Array.isArray(fromCoord) && validPt(fromCoord) ? fromCoord : null;
+  // لا تكرار: تنبيه واحد فعّال لكل راكب على نفس الوجهة تقريبًا (بدل تراكم تنبيهات متطابقة)
+  const existing = await db.query('SELECT id, to_lat, to_lng FROM route_alerts WHERE passenger_id=?', [req.user.id]);
+  const dup = existing.find(a => haversineKm([a.to_lat, a.to_lng], B) <= 2);
+  if (dup) return res.status(201).json({ ok: true, alreadyExists: true });
+  const id = await insertReturningId('route_alerts',
+    ['passenger_id', 'to_label', 'to_lat', 'to_lng', 'from_lat', 'from_lng', 'created_at'],
+    [req.user.id, toLabel || '', B[0], B[1], A ? A[0] : null, A ? A[1] : null, now()]);
+  res.status(201).json({ ok: true, id });
+});
+r.get('/route-alerts/mine', async (req, res) => {
+  res.json({ alerts: await db.query('SELECT id, to_label, created_at FROM route_alerts WHERE passenger_id=? ORDER BY created_at DESC', [req.user.id]) });
+});
+r.delete('/route-alerts/:id', async (req, res) => {
+  await db.execute('DELETE FROM route_alerts WHERE id=? AND passenger_id=?', [Number(req.params.id), req.user.id]);
+  res.json({ ok: true });
 });
 
 // ============ خدمة «اطلب توصيلة» (الراكب يبثّ طلبه، السائق القريب يقبله) ============
@@ -1167,6 +1274,30 @@ r.post('/requests/:id/rate', async (req, res) => {
   if (stars) await insertReturningId('reviews',
     ['target_id','reviewer_id','booking_id','stars','tags','comment','created_at'],
     [q.passenger_id, req.user.id, null, stars, tags, comment, now()]);
+  res.json({ ok: true });
+});
+
+// ============ السائقون المفضّلون (راكب) ============
+r.get('/favorites', async (req, res) => {
+  const rows = await db.query(
+    `SELECT f.driver_id, f.created_at, u.name, u.rating, u.rating_count, v.make, v.model, v.color, v.plate
+     FROM favorite_drivers f JOIN users u ON u.id=f.driver_id LEFT JOIN vehicles v ON v.user_id=f.driver_id
+     WHERE f.passenger_id=? ORDER BY f.created_at DESC`, [req.user.id]);
+  res.json({ favorites: rows.map(r0 => ({
+    driverId: r0.driver_id, name: r0.name, rating: r0.rating, ratingCount: Number(r0.rating_count) || 0,
+    car: [r0.make, r0.model, r0.color].filter(Boolean).join(' ') || 'مركبة', plate: r0.plate || '',
+  })) });
+});
+r.post('/favorites/:driverId', async (req, res) => {
+  const driverId = Number(req.params.driverId);
+  const drv = await db.queryOne("SELECT id FROM users WHERE id=? AND role='driver'", [driverId]);
+  if (!drv) return bad(res, 'السائق غير موجود', 404);
+  try { await insertReturningId('favorite_drivers', ['passenger_id', 'driver_id', 'created_at'], [req.user.id, driverId, now()]); }
+  catch (e) { /* موجود مسبقًا — تجاهل (UNIQUE) */ }
+  res.status(201).json({ ok: true });
+});
+r.delete('/favorites/:driverId', async (req, res) => {
+  await db.execute('DELETE FROM favorite_drivers WHERE passenger_id=? AND driver_id=?', [req.user.id, Number(req.params.driverId)]);
   res.json({ ok: true });
 });
 
