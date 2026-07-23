@@ -381,6 +381,44 @@ r.get('/withdrawals', async (req, res) => {
   res.json({ withdrawals: rows });
 });
 
+// ============ مستحقات المنصّة على السائق (النموذج النقدي) ============
+// السائق يحصّل الأجرة نقدًا ويصبح مدينًا للمنصّة بعمولتها؛ يحوّلها لحساب المنصّة ثم يسجّل التحويل هنا.
+r.get('/me/dues', async (req, res) => {
+  const u = await db.queryOne('SELECT platform_dues, pledge_accepted FROM users WHERE id=?', [req.user.id]);
+  // بيانات حساب المنصّة يضبطها المشرف من الإعدادات العامة
+  const rows = await db.query("SELECT key,value FROM app_settings WHERE key IN ('platformBankName','platformAccountName','platformIban','platformInstapay')", []);
+  const m = Object.fromEntries(rows.map(x => [x.key, x.value]));
+  const settlements = await db.query('SELECT id,amount,reference,status,admin_note,created_at,confirmed_at FROM settlements WHERE driver_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+  const txns = await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='platform' ORDER BY created_at DESC LIMIT 50", [req.user.id]);
+  res.json({
+    dues: round2(u ? u.platform_dues : 0),
+    pledgeAccepted: !!(u && u.pledge_accepted),
+    platform: { bankName: m.platformBankName || '', accountName: m.platformAccountName || '', iban: m.platformIban || '', instapay: m.platformInstapay || '' },
+    settlements, txns, currency: curSym(req.user.country_code),
+  });
+});
+
+// تعهّد الأمانة (قبل استخدام وضع السائق)
+r.post('/me/pledge', async (req, res) => {
+  await db.execute('UPDATE users SET pledge_accepted=1 WHERE id=?', [req.user.id]);
+  res.json({ ok: true, pledgeAccepted: true });
+});
+
+// السائق يسجّل تحويلًا لمستحقّات المنصّة (بانتظار تأكيد المشرف)
+r.post('/me/settlements', async (req, res) => {
+  const amount = round2(Number(req.body?.amount));
+  const reference = String(req.body?.reference || '').slice(0, 120);
+  if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'مبلغ غير صالح');
+  const u = await db.queryOne('SELECT platform_dues, name FROM users WHERE id=?', [req.user.id]);
+  if (amount > round2(u.platform_dues) + 0.001) return bad(res, 'المبلغ يتجاوز مستحقّاتك على المنصّة');
+  // منع تكرار طلب معلّق كبير: يُسمح بطلبات متعددة لكن ننبّه لو وُجد معلّق بنفس المبلغ
+  const id = await insertReturningId('settlements',
+    ['driver_id', 'amount', 'reference', 'status', 'created_at'],
+    [req.user.id, amount, reference, 'pending', now()]);
+  await addNotif(req.user.id, 'wallet', 'amber', 'سُجّل تحويلك للمنصّة', `${amount} ${await userCur(req.user.id)} — بانتظار تأكيد الإدارة`, '/(driver)/ddues');
+  res.status(201).json({ settlement: { id, amount, status: 'pending' } });
+});
+
 // تحويل رصيد المحفظة إلى مستخدم آخر برقم جواله
 r.post('/wallet/transfer', async (req, res) => {
   const toPhone = String(req.body?.phone || '').replace(/\D/g, '');
@@ -699,12 +737,14 @@ r.post('/trips/:id/arrived', async (req, res) => {
 r.post('/trips/:id/complete', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   if (trip.status !== 'live' && trip.status !== 'scheduled') return bad(res, 'الرحلة ليست جارية');
-  // التسوية المالية للمحفظة تشمل المدفوع محفظةً فقط — النقدي يُحصّله السائق مباشرةً
-  const gross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment <> 'cash'", [trip.id])).s);
-  const cashCollected = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment = 'cash'", [trip.id])).s);
-  const driverCountry = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code || 'SA';
-  const commission = await platformProfit(driverCountry, gross);
-  const net = round2(gross - commission);
+  const driverCountry = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code || 'JO';
+  // النموذج النقدي: السائق يحصّل الأجرة كاملةً نقدًا؛ عمولة المنصّة على هذه الأجرة تصبح ديْنًا عليه (platform_dues).
+  const cashGross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment = 'cash'", [trip.id])).s);
+  // توافق مع أي حجوزات محفظة قديمة (لم تعد تُنشأ): تُسوّى كالسابق (صافي للأرباح).
+  const walletGross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment <> 'cash'", [trip.id])).s);
+  const cashCommission = await platformProfit(driverCountry, cashGross);
+  const walletCommission = await platformProfit(driverCountry, walletGross);
+  const walletNet = round2(walletGross - walletCommission);
   // أكمل حجوزات الركّاب المرتبطة ونبّههم للتقييم قبل تغيير حالة الطلبات
   const doneReqs = await db.query("SELECT id, passenger_id FROM requests WHERE trip_id=? AND status IN ('onboard','accepted')", [trip.id]);
   for (const rq of doneReqs) {
@@ -713,16 +753,21 @@ r.post('/trips/:id/complete', async (req, res) => {
   }
   await db.execute("UPDATE requests SET status='dropped' WHERE trip_id=? AND status IN ('onboard','accepted')", [trip.id]);
   await db.execute("UPDATE trips SET status='completed', completed_at=? WHERE id=?", [now(), trip.id]);
-  if (net > 0) {
-    await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [net, req.user.id]);
-    await addTxn(req.user.id, 'driver', 'أرباح رحلة (صافي)', net, 'in');
+  // النقدي: أضف العمولة المستحقّة إلى ديْن السائق للمنصّة + سجّلها كمعاملة تدقيق
+  if (cashCommission > 0) {
+    await db.execute('UPDATE users SET platform_dues = platform_dues + ? WHERE id=?', [cashCommission, req.user.id]);
+    await addTxn(req.user.id, 'platform', 'عمولة مستحقّة للمنصّة (نقدي)', cashCommission, 'out');
   }
-  // سجّل عمولة المنصة الفعلية (حسب دولة السائق) كمعاملة قابلة للتدقيق
-  if (commission > 0) await addTxn(req.user.id, 'platform', 'عمولة المنصة', commission, 'in');
-  // سجّل المبلغ النقدي المُحصّل كمعلومة (لا يدخل المحفظة — بيد السائق)
-  if (cashCollected > 0) await addTxn(req.user.id, 'driver', 'تحصيل نقدي (بيد السائق)', cashCollected, 'in');
-  const earnings = round2((await db.queryOne('SELECT earnings FROM users WHERE id=?', [req.user.id])).earnings);
-  res.json({ gross, commission, net, cashCollected, earnings });
+  if (cashGross > 0) await addTxn(req.user.id, 'driver', 'تحصيل نقدي (بيد السائق)', cashGross, 'in');
+  // المحفظة القديمة (إن وُجدت): صافي للأرباح + عمولة مسجّلة
+  if (walletNet > 0) {
+    await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [walletNet, req.user.id]);
+    await addTxn(req.user.id, 'driver', 'أرباح رحلة (صافي)', walletNet, 'in');
+  }
+  if (walletCommission > 0) await addTxn(req.user.id, 'platform', 'عمولة المنصة', walletCommission, 'in');
+  const u = await db.queryOne('SELECT earnings, platform_dues FROM users WHERE id=?', [req.user.id]);
+  const commission = round2(cashCommission + walletCommission);
+  res.json({ gross: round2(cashGross + walletGross), commission, cashCollected: cashGross, cashCommission, dues: round2(u.platform_dues), earnings: round2(u.earnings) });
 });
 
 // ============ البلاغات ============

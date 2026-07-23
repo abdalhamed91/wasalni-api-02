@@ -290,6 +290,41 @@ r.patch('/withdrawals/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- تسويات السائقين للمنصّة (النموذج النقدي) ----------
+// السائق يحصّل نقدًا ويصبح مدينًا للمنصّة بعمولتها؛ يحوّلها لحساب المنصّة ويسجّل التحويل، والمشرف يؤكّده فيُخصم من ديْنه.
+r.get('/settlements', async (req, res) => {
+  const status = req.query.status;
+  const rows = await db.query(
+    `SELECT s.*, u.name driver_name, u.phone driver_phone, u.dial, u.country_code, u.platform_dues
+     FROM settlements s JOIN users u ON u.id=s.driver_id
+     ${status ? 'WHERE s.status=?' : ''} ORDER BY (CASE WHEN s.status='pending' THEN 0 ELSE 1 END), s.created_at DESC LIMIT 300`,
+    [...(status ? [status] : [])]);
+  for (const s of rows) { const ph = dispPhone(s.dial, s.driver_phone); s.dial = ph.dial; s.driver_phone = ph.phone; }
+  // ملخّص إجمالي المستحقّات على كل السائقين
+  const totalDues = round2((await db.queryOne('SELECT COALESCE(SUM(platform_dues),0) s FROM users', [])).s);
+  res.json({ settlements: rows, totalDues });
+});
+r.patch('/settlements/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const action = String(req.body?.action || ''); // confirm | reject
+  const note = req.body?.note ? String(req.body.note).slice(0, 300) : null;
+  const s = await db.queryOne('SELECT * FROM settlements WHERE id=?', [id]);
+  if (!s) return bad(res, 'التسوية غير موجودة', 404);
+  if (s.status !== 'pending') return bad(res, 'تمت معالجة هذه التسوية مسبقًا');
+  const cur = curOf((await db.queryOne('SELECT country_code FROM users WHERE id=?', [s.driver_id]) || {}).country_code);
+  if (action === 'confirm') {
+    // خصم المبلغ من مستحقّات السائق (لا ينزل تحت الصفر)
+    await db.execute('UPDATE users SET platform_dues = CASE WHEN platform_dues < ? THEN 0 ELSE platform_dues - ? END WHERE id=?', [s.amount, s.amount, s.driver_id]);
+    await db.execute('UPDATE settlements SET status=?, admin_note=?, confirmed_at=? WHERE id=?', ['confirmed', note, now(), id]);
+    await addTxn(s.driver_id, 'platform', 'تسوية مستحقّات — مؤكّدة', s.amount, 'in');
+    await addNotif(s.driver_id, 'check', 'green', 'تم تأكيد تسويتك ✓', `${round2(s.amount)} ${cur} — خُصمت من مستحقّاتك`, '/(driver)/ddues');
+  } else if (action === 'reject') {
+    await db.execute('UPDATE settlements SET status=?, admin_note=? WHERE id=?', ['rejected', note, id]);
+    await addNotif(s.driver_id, 'x', 'red', 'لم تُعتمد تسويتك', (note || 'تواصل مع الدعم') + ` — ${round2(s.amount)} ${cur}`, '/(driver)/ddues');
+  } else return bad(res, 'إجراء غير صالح (confirm|reject)');
+  res.json({ ok: true });
+});
+
 // ---------- المالية: دفتر العمولات والمعاملات ----------
 r.get('/finance', async (_req, res) => {
   const gross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM bookings WHERE status!='cancelled'", [])).s);

@@ -192,6 +192,8 @@ async function publicUser(u) {
     ratingCount: Number(u.rating_count) || 0, serviceType: u.service_type || 'carpool',
     avatar: u.avatar || '',
     wallet: u.wallet, earnings: u.earnings, vehicle: v,
+    platformDues: u.platform_dues != null ? Number(u.platform_dues) : 0,
+    pledgeAccepted: db.kind === 'postgres' ? !!u.pledge_accepted : !!Number(u.pledge_accepted),
     verified: db.kind === 'postgres' ? !!u.verified : !!Number(u.verified),
     verifyStatus: u.verify_status || 'none',
     docExpiry: {

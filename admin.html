@@ -144,6 +144,7 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
   <div class="nav-sep">المال والإدارة</div>
   <div class="nav-item" data-page="finance"><span class="ic">💰</span> المالية</div>
   <div class="nav-item" data-page="withdrawals"><span class="ic">🏦</span> السحوبات <span id="wdBadge" class="nav-badge" style="display:none"></span></div>
+  <div class="nav-item" data-page="settlements"><span class="ic">🧾</span> تسويات السائقين <span id="stBadge" class="nav-badge" style="display:none"></span></div>
   <div class="nav-item" data-page="countries"><span class="ic">🌍</span> الدول والتسعير</div>
   <div class="nav-item" data-page="companies"><span class="ic">🏢</span> حسابات الشركات</div>
   <div class="nav-item" data-page="team"><span class="ic">👥</span> الأدوار والصلاحيات</div>
@@ -201,14 +202,14 @@ async function doLogin(){
 }
 function logout(){ localStorage.removeItem('wasalni_admin'); location.reload(); }
 function enterApp(){ $('#login').classList.add('hidden'); $('#app-sb').classList.remove('hidden'); $('#app-main').classList.remove('hidden'); bindNav(); go('dashboard');
-  updateBadge(); refreshSupBadge(); refreshWdBadge(); refreshConvBadge();
-  if(!S._badgeIv){ S._badgeIv=setInterval(()=>{ refreshConvBadge(); refreshSupBadge(); refreshWdBadge(); updateBadge(); },15000); } }
+  updateBadge(); refreshSupBadge(); refreshWdBadge(); refreshConvBadge(); refreshStBadge();
+  if(!S._badgeIv){ S._badgeIv=setInterval(()=>{ refreshConvBadge(); refreshSupBadge(); refreshWdBadge(); refreshStBadge(); updateBadge(); },15000); } }
 
 function bindNav(){ document.querySelectorAll('.nav-item[data-page]').forEach(el=>el.onclick=()=>go(el.dataset.page)); }
 function go(page){
   S.page=page;
   document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));
-  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',companies:'حسابات الشركات',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
+  const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',settlements:'تسويات السائقين',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',companies:'حسابات الشركات',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
   $('#pageTitle').textContent=titles[page]||page;
   render();
 }
@@ -222,7 +223,7 @@ async function render(){
   const map={dashboard:renderDashboard,operations:renderOperations,
     users:x=>renderUsers(x,null),drivers:x=>renderUsers(x,'driver'),
     verify:renderVerify,trips:renderTrips,bookings:renderBookings,finance:renderFinance,
-    withdrawals:renderWithdrawals,reports:renderReports,support:renderSupport,
+    withdrawals:renderWithdrawals,settlements:renderSettlements,reports:renderReports,support:renderSupport,
     conversations:renderConversations,promos:renderPromos,notifications:renderAdminNotifs,
     countries:renderCountries,companies:renderCompanies,team:renderTeam,settings:renderSettings};
   try{
@@ -700,6 +701,43 @@ async function wdAction(id,action){
 }
 async function refreshWdBadge(){ try{ const d=await apiGet('/withdrawals?status=pending'); const b=$('#wdBadge'); const n=(d.withdrawals||[]).length; if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
 
+// ===== تسويات السائقين للمنصّة (النموذج النقدي: السائق مدين بعمولة المنصّة على تحصيله النقدي) =====
+async function renderSettlements(c){
+  const d=await apiGet('/settlements');
+  const all=d.settlements||[];
+  const pending=all.filter(s=>s.status==='pending');
+  const totalPending=pending.reduce((s,x)=>s+(+x.amount||0),0);
+  const totalConfirmed=all.filter(s=>s.status==='confirmed').reduce((s,x)=>s+(+x.amount||0),0);
+  const stTag=s=>s==='confirmed'?'<span class="tag t-green">مؤكّدة</span>':s==='rejected'?'<span class="tag t-red">مرفوضة</span>':'<span class="tag t-am">معلّقة</span>';
+  c.innerHTML=`
+    <div class="grid g4">
+      ${stat('إجمالي المستحقّ على السائقين','د.أ '+fmt(d.totalDues),'🧾','b-or','عمولة المنصّة غير المسدّدة')}
+      ${stat('تحويلات معلّقة',fmt(pending.length),'⏳','b-am','بانتظار تأكيدك')}
+      ${stat('مجموع المعلّق','د.أ '+fmt(totalPending),'💵','b-blue','ستُخصم عند التأكيد')}
+      ${stat('إجمالي المؤكّد','د.أ '+fmt(totalConfirmed),'✅','b-gr','سُدّدت للمنصّة')}
+    </div>
+    <h3 class="sec-title" style="margin:18px 0 10px">تحويلات السائقين لمستحقّات المنصّة</h3>
+    ${filterControls('tblSt',{placeholder:'بحث بالسائق أو الجوال…',filters:[{col:4,label:'الحالة',options:[{v:'معلّقة',t:'معلّقة'},{v:'مؤكّدة',t:'مؤكّدة'},{v:'مرفوضة',t:'مرفوضة'}]}]})}
+    <div class="card" style="padding:0;overflow:hidden"><table id="tblSt">
+      <thead><tr><th>السائق</th><th>الجوال</th><th>مبلغ التحويل</th><th>المستحقّ عليه الآن</th><th>الحالة</th><th>المرجع</th><th data-nosort>إجراء</th></tr></thead>
+      <tbody>${all.length?all.map(s=>`<tr>
+        <td>${esc(s.driver_name)}</td>
+        <td class="num" dir="ltr" style="text-align:right">${esc((s.dial||'')+(s.driver_phone||''))}</td>
+        <td class="num">${CUR[s.country_code]||'د.أ'} ${fmt(s.amount)}</td>
+        <td class="num">${CUR[s.country_code]||'د.أ'} ${fmt(s.platform_dues)}</td>
+        <td>${stTag(s.status)}</td>
+        <td class="muted" style="font-size:11.5px">${esc(s.reference||'—')}</td>
+        <td>${s.status==='pending'?`<button class="btn btn-pri" style="padding:5px 10px" onclick="stAction(${s.id},'confirm')">تأكيد الاستلام</button> <button class="btn btn-gh" style="padding:5px 10px" onclick="stAction(${s.id},'reject')">رفض</button>`:(s.admin_note?esc(s.admin_note):'—')}</td>
+      </tr>`).join(''):'<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">لا توجد تسويات بعد</td></tr>'}</tbody>
+    </table></div>`;
+}
+async function stAction(id,action){
+  let note=null;
+  if(action==='reject'){ note=prompt('سبب الرفض (يصل للسائق):'); if(note===null) return; }
+  try{ await apiSend('/settlements/'+id,'PATCH',{action,note}); toast(action==='confirm'?'✅ أُكّدت التسوية وخُصمت من مستحقّات السائق':'رُفضت التسوية'); refresh(); refreshStBadge(); }catch(e){ toast('تعذّر: '+e.message); }
+}
+async function refreshStBadge(){ try{ const d=await apiGet('/settlements?status=pending'); const b=$('#stBadge'); const n=(d.settlements||[]).length; if(b){ b.textContent=n||''; b.style.display=n?'inline-block':'none'; } }catch(e){} }
+
 async function renderSettings(c){
   const s=await apiGet('/settings');
   let appS={};
@@ -773,6 +811,17 @@ async function renderSettings(c){
       <div id="prMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
     </div>
 
+    <div class="card" style="background:linear-gradient(135deg,#FFF7ED,#fff)">
+      <h3 style="font-size:16px;margin-bottom:6px">🏦 حساب المنصّة لتحصيل المستحقّات</h3>
+      <p class="muted" style="font-size:12.5px;margin-bottom:14px">يظهر هذا الحساب للسائق ليحوّل عليه عمولة المنصّة المستحقّة عليه (النموذج النقدي). عبّئ الحقول المتاحة لديك.</p>
+      <div class="field"><label>اسم البنك</label><input id="as_platformBankName" value="${g('platformBankName','')}" placeholder="مثال: البنك العربي"></div>
+      <div class="field"><label>اسم صاحب الحساب</label><input id="as_platformAccountName" value="${g('platformAccountName','')}" placeholder="اسم الشركة/المالك"></div>
+      <div class="field"><label>رقم الآيبان (IBAN)</label><input id="as_platformIban" value="${g('platformIban','')}" placeholder="JO.." dir="ltr"></div>
+      <div class="field"><label>محفظة/InstaPay (اختياري)</label><input id="as_platformInstapay" value="${g('platformInstapay','')}" placeholder="رقم أو معرّف" dir="ltr"></div>
+      <button class="btn btn-pri" onclick="savePlatformBank()">حفظ حساب المنصّة</button>
+      <div id="pbMsg" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+    </div>
+
     <div class="card">
       <h3 style="font-size:16px;margin-bottom:14px">🔐 الأمان والمصادقة</h3>
       <div class="row" style="gap:10px">
@@ -837,6 +886,10 @@ async function saveAppSettings(){
 async function savePricing(){
   const b={serviceFee:$('#as_serviceFee').value,cancelFee:$('#as_cancelFee').value,minTopup:$('#as_minTopup').value,minWithdraw:$('#as_minWithdraw').value,allowCash:$('#as_allowCash').checked?'1':'0'};
   await _saveAS(b,'#prMsg','سياسة التسعير');
+}
+async function savePlatformBank(){
+  const b={platformBankName:$('#as_platformBankName').value.trim(),platformAccountName:$('#as_platformAccountName').value.trim(),platformIban:$('#as_platformIban').value.trim().replace(/\s+/g,'').toUpperCase(),platformInstapay:$('#as_platformInstapay').value.trim()};
+  await _saveAS(b,'#pbMsg','حساب المنصّة');
 }
 async function saveSecurity(){
   const b={otpTtl:$('#as_otpTtl').value,otpMax:$('#as_otpMax').value,requireKyc:$('#as_requireKyc').checked?'1':'0',socialLogin:$('#as_socialLogin').checked?'1':'0'};

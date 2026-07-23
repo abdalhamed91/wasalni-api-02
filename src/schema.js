@@ -337,6 +337,18 @@ const TABLES = [
     from_lat REAL, from_lng REAL,
     created_at ${NOW}
   )`,
+  // تسويات السائق للمنصّة: السائق يحصّل الأجرة نقدًا ويحوّل عمولة المنصّة المستحقّة عليه لحسابها،
+  // ثم يسجّل التحويل هنا ويؤكّده المشرف فيُخصم من مستحقّاته
+  `CREATE TABLE IF NOT EXISTS settlements (
+    id ${ID},
+    driver_id ${INT} NOT NULL,
+    amount REAL NOT NULL,
+    reference TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    admin_note TEXT,
+    created_at ${NOW},
+    confirmed_at ${INT}
+  )`,
 ];
 
 // يضمن وجود عمود في جدول (يضيفه إن غاب) — يعمل على SQLite وPostgreSQL
@@ -426,6 +438,10 @@ async function runMigrations() {
   await ensureColumn('users', 'company_id', PG ? 'BIGINT' : 'INTEGER');
   // رقم الطوارئ المحلي لكل دولة (يضبطه المشرف) — يظهر لزر SOS بدل تخمين رقم قد يكون خاطئًا
   await ensureColumn('country_settings', 'emergency_phone', "TEXT DEFAULT ''");
+  // النموذج النقدي: السائق يحصّل الأجرة كاملةً نقدًا ويصبح مدينًا للمنصّة بعمولتها (platform_dues)،
+  // ويتعهّد بالأمانة (pledge_accepted) قبل استخدام وضع السائق
+  await ensureColumn('users', 'platform_dues', 'REAL NOT NULL DEFAULT 0');
+  await ensureColumn('users', 'pledge_accepted', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات
@@ -446,6 +462,8 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_favorites_passenger ON favorite_drivers(passenger_id)',
   'CREATE INDEX IF NOT EXISTS idx_route_alerts_to ON route_alerts(to_lat, to_lng)',
   'CREATE INDEX IF NOT EXISTS idx_reports_priority ON reports(priority)',
+  'CREATE INDEX IF NOT EXISTS idx_settlements_driver ON settlements(driver_id)',
+  'CREATE INDEX IF NOT EXISTS idx_settlements_status ON settlements(status)',
 ];
 
 async function initSchema() {
