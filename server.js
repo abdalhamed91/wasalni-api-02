@@ -65,6 +65,13 @@ app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'terms.html')
 // صفحة تتبّع عامة عبر رابط المشاركة (تقرأ الرمز من المسار وتستعلم /api/live/:token)
 app.get('/live/:token', (_req, res) => res.sendFile(path.join(__dirname, 'live.html')));
 
+// تنزيل أحدث نسخة APK (يُستبدل الملف يدويًا مع كل إصدار جديد ويُرفع مع الكود — يبقى ثابتًا عبر إعادة النشر
+// خلافًا لمجلد /uploads المؤقّت). يُستخدم من زر «تنزيل التحديث» بإشعار لوحة الإدارة.
+app.get('/download/apk', (_req, res) => {
+  const file = path.join(__dirname, 'public', 'downloads', 'wasalni-latest.apk');
+  res.download(file, 'wasalni.apk', (err) => { if (err && !res.headersSent) res.status(404).json({ error: 'لا يوجد إصدار متاح للتنزيل بعد' }); });
+});
+
 // صفحة الدفع بالبطاقة (نموذج Moyasar) — تعمل فقط عند ضبط MOYASAR_PUBLISHABLE_KEY
 // التطبيق يفتحها بمبلغ محدّد، وعند اكتمال الدفع يعود Moyasar إلى /pay/done?id=<paymentId>
 // فيلتقط التطبيق المعرّف ويستدعي /api/wallet/topup {paymentId} الذي يتحقّق من المبلغ ويشحن المحفظة.

@@ -1397,8 +1397,11 @@ async function renderAdminNotifs(c){
     <div class="grid g2">
       <div class="card">
         <h3 style="font-size:15px;margin-bottom:14px">🔔 إرسال إشعار جماعي</h3>
+        <button class="btn btn-gh" style="margin-bottom:14px;font-size:12.5px" onclick="fillUpdateTemplate()">📦 تعبئة كإشعار «تحديث تطبيق جديد»</button>
         <div class="field"><label>العنوان</label><input id="ntitle" placeholder="عرض جديد!"></div>
         <div class="field"><label>النص</label><textarea id="nbody" rows="3" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;resize:vertical"></textarea></div>
+        <div class="field"><label>رابط تنزيل التحديث (اختياري)</label><input id="nurl" placeholder="https://example.com/wasalni.apk أو رابط Google Play"></div>
+        <div class="muted" style="font-size:11.5px;margin-top:-8px;margin-bottom:12px">إذا عبّيت هذا الحقل، بيوصل الإشعار بزر «تنزيل التحديث» بدل الفتح العادي. اترك فاضي لإشعار عادي.</div>
         <div class="field"><label>الجمهور المستهدف</label>
           <select id="naud"><option value="all">كل المستخدمين</option><option value="passengers">الركّاب فقط</option><option value="drivers">السائقون فقط</option></select></div>
         <button class="btn btn-pri" onclick="sendBroadcast()">إرسال الإشعار</button>
@@ -1410,14 +1413,27 @@ async function renderAdminNotifs(c){
             <div class="row" style="justify-content:space-between;margin-bottom:4px"><b>${esc(n.title)}</b>
               <span class="tag t-blue">${n.audience==='all'?'الجميع':n.audience==='drivers'?'السائقون':'الركّاب'}</span></div>
             <div style="font-size:13px;margin-bottom:4px">${esc(n.body)}</div>
-            <div class="muted" style="font-size:11.5px">أُرسل لـ ${n.sent_count} مستخدم</div>
+            <div class="row" style="justify-content:space-between">
+              <div class="muted" style="font-size:11.5px">أُرسل لـ ${n.sent_count} مستخدم</div>
+              ${n.url?`<span class="tag t-green">⬇ تحديث</span>`:''}
+            </div>
           </div>`).join('') : '<div class="empty">لم تُرسل إشعارات بعد</div>'}
       </div>
     </div>`;
 }
+function fillUpdateTemplate(){
+  $('#ntitle').value='🎉 تحديث جديد لتطبيق وصلني';
+  $('#nbody').value='صدرت نسخة جديدة فيها تحسينات وإصلاحات — حدّث تطبيقك الآن.';
+  $('#nurl').value=S.api+'/download/apk';
+  $('#nurl').focus();
+  toast('عدّل الرابط إذا بتستضيف التحديث بمكان ثاني (Google Play مثلًا)');
+}
 async function sendBroadcast(){
   const b={title:$('#ntitle').value.trim(),body:$('#nbody').value.trim(),audience:$('#naud').value};
+  const url=$('#nurl').value.trim();
+  if(url) b.url=url;
   if(!b.title||!b.body){ toast('العنوان والنص مطلوبان'); return; }
+  if(url && !/^https?:\/\//i.test(url)){ toast('رابط التنزيل يجب أن يبدأ بـ https://'); return; }
   try{ const r=await apiSend('/notifications','POST',b); toast('✓ أُرسل لـ '+r.sent+' مستخدم'); render(); }
   catch(e){ toast(e.message); }
 }

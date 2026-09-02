@@ -442,6 +442,8 @@ async function runMigrations() {
   // ويتعهّد بالأمانة (pledge_accepted) قبل استخدام وضع السائق
   await ensureColumn('users', 'platform_dues', 'REAL NOT NULL DEFAULT 0');
   await ensureColumn('users', 'pledge_accepted', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
+  // إشعار تحديث التطبيق: رابط تنزيل اختياري يُرسَل مع الإشعار الجماعي (زر "تنزيل التحديث" بالتطبيق)
+  await ensureColumn('admin_notifications', 'url', 'TEXT');
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

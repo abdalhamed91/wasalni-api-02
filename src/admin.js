@@ -581,15 +581,18 @@ r.get('/notifications', async (_req, res) => {
   res.json({ notifications: rows });
 });
 r.post('/notifications', async (req, res) => {
-  const { title, body, audience } = req.body || {};
+  const { title, body, audience, url } = req.body || {};
   if (!title || !body) return bad(res, 'العنوان والنص مطلوبان');
   const aud = ['all', 'passengers', 'drivers'].includes(audience) ? audience : 'all';
+  // رابط تنزيل اختياري (مثلًا تحديث جديد للتطبيق) — يظهر بالتطبيق كزر "تنزيل" بدل التنقّل الداخلي المعتاد
+  const link = url && /^https?:\/\//i.test(String(url).trim()) ? String(url).trim().slice(0, 500) : null;
+  if (url && !link) return bad(res, 'رابط التنزيل غير صالح (يجب أن يبدأ بـ https://)');
   // احسب الجمهور وأرسل لكل مستخدم مطابق
   const where = aud === 'all' ? '' : (aud === 'drivers' ? "WHERE role='driver'" : "WHERE role='passenger'");
   const targets = await db.query(`SELECT id FROM users ${where}`, []);
-  for (const u of targets) await addNotif(u.id, 'bell', 'blue', title, body);
+  for (const u of targets) await addNotif(u.id, link ? 'download' : 'bell', 'blue', title, body, link);
   const id = await insertReturningId('admin_notifications',
-    ['title', 'body', 'audience', 'sent_count', 'created_at'], [title, body, aud, targets.length, now()]);
+    ['title', 'body', 'audience', 'sent_count', 'url', 'created_at'], [title, body, aud, targets.length, link, now()]);
   res.status(201).json({ ok: true, id, sent: targets.length });
 });
 
