@@ -250,6 +250,31 @@ r.post('/trips/:id/cancel', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- طلبات «اطلب توصيلة» (المفاوضة الحيّة قبل التحويل لرحلة) ----------
+r.get('/ride-requests', async (req, res) => {
+  const status = req.query.status; // فلتر اختياري
+  const rows = await db.query(
+    `SELECT rr.*, p.name passenger_name2, p.phone passenger_phone, d.name driver_name, d.phone driver_phone
+     FROM ride_requests rr
+     LEFT JOIN users p ON p.id=rr.passenger_id
+     LEFT JOIN users d ON d.id=rr.driver_id
+     ${status ? 'WHERE rr.status=?' : ''}
+     ORDER BY rr.created_at DESC LIMIT 200`,
+    [...(status ? [status] : [])]);
+  res.json({ requests: rows });
+});
+// إلغاء طلب توصيلة عالق من الإدارة (لسا ما تحوّل لرحلة — ما في مبلغ مسحوب بعد)
+r.post('/ride-requests/:id/cancel', async (req, res) => {
+  const rr = await db.queryOne('SELECT * FROM ride_requests WHERE id=?', [Number(req.params.id)]);
+  if (!rr) return bad(res, 'الطلب غير موجود', 404);
+  if (!['open', 'offered', 'countered'].includes(rr.status)) return bad(res, 'لا يمكن إلغاء هذا الطلب');
+  const reason = req.body?.reason ? String(req.body.reason).slice(0, 300) : 'أُلغي من الإدارة';
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE id=?", [rr.id]);
+  await addNotif(rr.passenger_id, 'x', 'red', 'أُلغي طلب توصيلتك', `${rr.from_label} ← ${rr.to_label} — ${reason}`, '/(passenger)/myrequests');
+  if (rr.driver_id) await addNotif(rr.driver_id, 'x', 'red', 'أُلغي طلب التوصيلة', `${rr.from_label} ← ${rr.to_label} — ${reason}`, '/(driver)/driderequests');
+  res.json({ ok: true });
+});
+
 // ---------- الحجوزات ----------
 r.get('/bookings', async (_req, res) => {
   const rows = await db.query(
@@ -637,13 +662,20 @@ r.get('/operations', async (_req, res) => {
   const activeTrips = await db.query("SELECT t.*, u.name driver_name FROM trips t JOIN users u ON u.id=t.driver_id WHERE t.status NOT IN ('completed','cancelled') ORDER BY t.created_at DESC LIMIT 50", []);
   for (const t of activeTrips) t.requests = await db.query('SELECT passenger_name,status,pickup,pickup_lat,pickup_lng FROM requests WHERE trip_id=?', [t.id]);
   const liveBookings = await db.query("SELECT * FROM bookings WHERE status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 50", []);
+  // طلبات «اطلب توصيلة» التي ما زالت قيد التفاوض (لسا ما تحوّلت لرحلة) — نعرضها للإدارة بغرض المتابعة/التدخّل
+  const pendingRideRequests = await db.query(
+    `SELECT rr.*, p.name passenger_name2, d.name driver_name FROM ride_requests rr
+     LEFT JOIN users p ON p.id=rr.passenger_id LEFT JOIN users d ON d.id=rr.driver_id
+     WHERE rr.status IN ('open','offered','countered') ORDER BY rr.created_at DESC LIMIT 100`, []);
   res.json({
     activeTrips,
     liveBookings,
+    pendingRideRequests,
     summary: {
       activeTrips: activeTrips.length,
       liveBookings: liveBookings.length,
       onlineDrivers: (await db.queryOne("SELECT COUNT(*) c FROM users WHERE role='driver'", [])).c,
+      pendingRideRequests: pendingRideRequests.length,
     },
   });
 });
