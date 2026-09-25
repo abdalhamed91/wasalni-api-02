@@ -109,7 +109,9 @@ async function main() {
   const complete = await req('POST', `/trips/${tripId}/complete`, {}, drvToken);
   check('trip complete ok', complete.status === 200, complete.body);
   check('trip complete reports cashCollected > 0', complete.body.cashCollected > 0, complete.body);
-  check('trip complete gross reflects only wallet fare (10)', complete.body.gross === 10, complete.body);
+  // النموذج النقدي (v3.7+): الإجمالي = نقدي + محفظة، وعمولة النقدي تُضاف كمستحقّات على السائق
+  check('trip complete gross = cash + wallet fares (20)', complete.body.gross === 20, complete.body);
+  check('cash commission recorded as driver dues', complete.body.cashCommission > 0 && complete.body.dues >= complete.body.cashCommission, complete.body);
 
   console.log('== on-demand ride-request flow (wallet) ==');
   const rrPax = await registerPhone('790000004');

@@ -7,13 +7,17 @@ const crypto = require('crypto');
 const UPLOAD_DIR = path.join(path.dirname(process.env.DB_PATH || path.join(__dirname, '..', 'wasalni.db')), 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const { db, now, round2, insertReturningId, addTxn, addNotif, COMMISSION_RATE, SERVICE_COUNTRIES, commissionRate, serviceCountries, platformProfit, seatPriceForDistance, countrySetting } = require('./db');
-const { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin } = require('./auth');
+const { sendOtp, verifyOtp, checkOtp, normalizePhone, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin } = require('./auth');
 const { paymentsEnabled, verifyPayment } = require('./payments');
 const { publishFromTemplate, todayStr, dow } = require('./recurring');
 const { notifyRouteAlerts } = require('./alerts');
+const { tl, toEn, langOf } = require('./i18n');
 
 const r = express.Router();
-const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+// رسائل الخطأ بلغة المستخدم (ترويسة X-App-Lang) — النص العربي هو الأصل
+const bad = (res, msg, code = 400) => res.status(code).json({ error: tl(langOf(res.req), msg) });
+// ترجمة قوائم الإشعارات/المعاملات عند القراءة للمستخدم الإنجليزي
+const trRows = (req, rows, fields) => (langOf(req) === 'en' ? rows.map((x) => { const o = { ...x }; for (const f of fields) o[f] = toEn(o[f]); return o; }) : rows);
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // رموز عملات الدول (للإشعارات والإيصالات) — الافتراضي د.أ (سوق الإطلاق: الأردن)
@@ -105,9 +109,9 @@ r.post('/auth/google', async (req, res) => {
 // تتبّع عام برابط المشاركة (بلا تسجيل دخول) — بيانات محدودة فقط
 r.get('/live/:token', async (req, res) => {
   const token = String(req.params.token || '');
-  if (!token || token.length < 6) return res.status(404).json({ error: 'رابط غير صالح' });
+  if (!token || token.length < 6) return bad(res, 'رابط غير صالح', 404);
   const b = await db.queryOne('SELECT * FROM bookings WHERE share_token=?', [token]);
-  if (!b) return res.status(404).json({ error: 'رابط غير صالح' });
+  if (!b) return bad(res, 'رابط غير صالح', 404);
   let trip = null;
   if (b.request_id) trip = await db.queryOne('SELECT t.* FROM trips t JOIN requests r ON r.trip_id=t.id WHERE r.id=?', [b.request_id]);
   const hasLoc = trip && trip.driver_lat != null && trip.driver_lng != null;
@@ -158,22 +162,54 @@ r.get('/me', async (req, res) => {
 });
 
 r.patch('/me', async (req, res) => {
-  const { name, email, role, countryCode, dial, gender, avatar, birthDate } = req.body || {};
+  const { name, email, role, countryCode, dial, gender, avatar, birthDate, lang, available } = req.body || {};
+  // X1: دولة من دول الخدمة فقط، وصورة من خادمنا أو رابط https فقط
+  if (countryCode != null && !(await serviceCountries()).includes(String(countryCode).toUpperCase())) return bad(res, 'رمز الدولة غير صالح');
+  if (avatar != null && avatar !== '' && !/^\/uploads\/[\w.-]+$/.test(String(avatar)) && !/^https:\/\/[^\s]+$/.test(String(avatar))) return bad(res, 'رابط الصورة غير صالح');
+  // لغة الواجهة (لترجمة الإشعارات المدفوعة) وتوفّر السائق لاستقبال طلبات «اطلب توصيلة»
+  if (lang === 'ar' || lang === 'en') await db.execute('UPDATE users SET lang=? WHERE id=?', [lang, req.user.id]);
+  if (available !== undefined) await db.execute('UPDATE users SET available=? WHERE id=?', [available ? 1 : 0, req.user.id]);
   if (role && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
   if (gender && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
+  if (name != null && (String(name).trim().length < 2 || String(name).trim().length > 60)) return bad(res, 'الاسم يجب أن يكون بين 2 و60 حرفًا');
+  // تغيير البريد يُسقط التوثيق — لا يرث بريدٌ جديد علامة «موثّق» من البريد السابق
+  if (email != null && String(email).trim().toLowerCase() !== String(req.user.email || '').trim().toLowerCase()) {
+    await db.execute('UPDATE users SET email_verified=0 WHERE id=?', [req.user.id]);
+  }
   await db.execute(`UPDATE users SET
       name = COALESCE(?, name), email = COALESCE(?, email),
       role = COALESCE(?, role), country_code = COALESCE(?, country_code), dial = COALESCE(?, dial),
       gender = COALESCE(?, gender), avatar = COALESCE(?, avatar), birth_date = COALESCE(?, birth_date)
-    WHERE id=?`, [name ?? null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, birthDate ?? null, req.user.id]);
+    WHERE id=?`, [name != null ? String(name).trim() : null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, birthDate ?? null, req.user.id]);
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u) });
 });
 
+// حذف الحساب نهائيًا (متطلّب Google Play): إخفاء الهوية ومسح البيانات الشخصية مع إبقاء
+// السجلات المالية/الرحلات مجهولة الهوية للمحاسبة. يُمنع مع مستحقّات غير مسدّدة أو رحلة/حجز نشط.
+r.delete('/me', async (req, res) => {
+  const u = req.user;
+  const dues = Number(u.platform_dues) || 0;
+  if (dues > 0.004) return bad(res, `عليك مستحقّات للمنصّة بقيمة ${round2(dues)} — سدّدها أولًا من «محفظة السائق ← مستحقّات المنصّة» ثم احذف الحساب`);
+  const activeTrip = await db.queryOne("SELECT id FROM trips WHERE driver_id=? AND status IN ('scheduled','live') LIMIT 1", [u.id]);
+  if (activeTrip) return bad(res, 'لديك رحلة منشورة نشطة — ألغها أو أنهِها أولًا ثم احذف الحساب');
+  const activeBooking = await db.queryOne("SELECT id FROM bookings WHERE passenger_id=? AND status NOT IN ('completed','cancelled') LIMIT 1", [u.id]);
+  if (activeBooking) return bad(res, 'لديك حجز نشط — ألغه أو انتظر انتهاءه ثم احذف الحساب');
+  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE passenger_id=? AND status IN ('open','offered','countered')", [u.id]);
+  for (const t of ['places', 'saved_routes', 'bank_accounts', 'route_alerts']) {
+    try { await db.execute(`DELETE FROM ${t} WHERE user_id=?`, [u.id]); } catch (e) { /* جدول اختياري */ }
+  }
+  try { await db.execute('DELETE FROM favorite_drivers WHERE passenger_id=? OR driver_id=?', [u.id, u.id]); } catch (e) {}
+  await db.execute(`UPDATE users SET status='deleted', name='مستخدم محذوف', phone=?, email='', email_verified=0,
+      avatar='', gender=NULL, id_number='', birth_date='', city='', docs='', push_token=NULL, email_otp='' WHERE id=?`,
+    ['deleted-' + u.id + '-' + now(), u.id]);
+  res.json({ ok: true });
+});
+
 // تغيير رقم الجوال — يتطلّب تحقّقًا برمز على الرقم الجديد
 r.post('/me/phone/otp', async (req, res) => {
-  const phone = String(req.body?.phone || '').replace(/\D/g, '');
   const dial = String(req.body?.dial || req.user.dial || '+962');
+  const phone = normalizePhone(req.body?.phone, dial);
   if (phone.length < 7) return bad(res, 'رقم جوال غير صالح');
   const taken = await db.queryOne('SELECT id FROM users WHERE phone=? OR phone LIKE ?', [phone, '%' + phone.slice(-9)]);
   if (taken && taken.id !== req.user.id) return bad(res, 'هذا الرقم مستخدم بحساب آخر');
@@ -182,8 +218,8 @@ r.post('/me/phone/otp', async (req, res) => {
   res.json({ sent: true, devCode: r2.devCode || undefined });
 });
 r.post('/me/phone/verify', async (req, res) => {
-  const phone = String(req.body?.phone || '').replace(/\D/g, '');
   const dial = String(req.body?.dial || req.user.dial || '+962');
+  const phone = normalizePhone(req.body?.phone, dial);
   const code = String(req.body?.code || '');
   if (phone.length < 7) return bad(res, 'رقم جوال غير صالح');
   const taken = await db.queryOne('SELECT id FROM users WHERE phone=? OR phone LIKE ?', [phone, '%' + phone.slice(-9)]);
@@ -294,7 +330,7 @@ r.put('/me/vehicle', async (req, res) => {
 // ============ المحفظة (راكب) ============
 r.get('/wallet', async (req, res) => {
   const u = await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id]);
-  const txns = await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='passenger' ORDER BY created_at DESC LIMIT 50", [req.user.id]);
+  const txns = trRows(req, await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='passenger' ORDER BY created_at DESC LIMIT 50", [req.user.id]), ['title']);
   res.json({ balance: round2(u.wallet), txns });
 });
 
@@ -332,7 +368,7 @@ r.post('/wallet/topup', async (req, res) => {
 // ============ أرباح السائق ============
 r.get('/earnings', async (req, res) => {
   const u = await db.queryOne('SELECT earnings FROM users WHERE id=?', [req.user.id]);
-  const txns = await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='driver' ORDER BY created_at DESC LIMIT 50", [req.user.id]);
+  const txns = trRows(req, await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='driver' ORDER BY created_at DESC LIMIT 50", [req.user.id]), ['title']);
   res.json({ balance: round2(u.earnings), txns });
 });
 
@@ -389,7 +425,7 @@ r.get('/me/dues', async (req, res) => {
   const rows = await db.query("SELECT key,value FROM app_settings WHERE key IN ('platformBankName','platformAccountName','platformIban','platformInstapay')", []);
   const m = Object.fromEntries(rows.map(x => [x.key, x.value]));
   const settlements = await db.query('SELECT id,amount,reference,status,admin_note,created_at,confirmed_at FROM settlements WHERE driver_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
-  const txns = await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='platform' ORDER BY created_at DESC LIMIT 50", [req.user.id]);
+  const txns = trRows(req, await db.query("SELECT id,title,amount,kind,created_at at FROM transactions WHERE user_id=? AND scope='platform' ORDER BY created_at DESC LIMIT 50", [req.user.id]), ['title']);
   res.json({
     dues: round2(u ? u.platform_dues : 0),
     pledgeAccepted: !!(u && u.pledge_accepted),
@@ -499,8 +535,10 @@ async function validateTripFields(userId, body) {
   const KINDS = ['city', 'intercity', 'public_bus', 'school_bus', 'workers'];
   const kind = KINDS.includes(body?.kind) ? body.kind : 'city';
   const isBus = kind === 'public_bus' || kind === 'school_bus' || kind === 'workers';
-  const p = Number(body.price), s = Number(body.seats);
-  if (!Number.isFinite(p) || p < (isBus ? 0 : 5) || p > 500) return { error: isBus ? 'سعر غير صالح (0–500)' : 'سعر المقعد غير صالح (5–500)' };
+  // الحد الأدنى 0.25 (يناسب الدينار الأردني: مقعد داخل عمّان ≈ 1–2 د.أ) وبكسور حتى منزلتين
+  const MIN_SEAT = 0.25;
+  const p = Math.round(Number(body.price) * 100) / 100, s = Number(body.seats);
+  if (!Number.isFinite(p) || p < (isBus ? 0 : MIN_SEAT) || p > 500) return { error: isBus ? 'سعر غير صالح (0–500)' : `سعر المقعد غير صالح (${MIN_SEAT}–500)` };
   const cap = isBus ? 60 : ((await db.queryOne('SELECT capacity FROM vehicles WHERE user_id=?', [userId])) || {}).capacity || 4;
   if (!Number.isInteger(s) || s < 1 || s > cap) return { error: `عدد المقاعد يجب أن يكون 1–${cap}` };
   const gp = body.genderPref === 'female' ? 'female' : 'any';
@@ -571,7 +609,7 @@ r.post('/trips/:id/cancel', async (req, res) => {
           await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة ملغاة من السائق', bk.fare, 'in');
         }
       }
-      await addNotif(rq.passenger_id, 'x', 'red', 'أُلغيت رحلتك من السائق', `${trip.from_label} ← ${trip.to_label}`, '/(passenger)/wallet');
+      await addNotif(rq.passenger_id, 'x', 'red', 'أُلغيت رحلتك من السائق', `${trip.from_label} ← ${trip.to_label}`, '/(passenger)/trips');
     }
   }
   await db.execute("UPDATE requests SET status='cancelled' WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
@@ -586,8 +624,8 @@ r.patch('/trips/:id', async (req, res) => {
   const { price, time, date, genderPref, seats } = req.body || {};
   const sets = [], vals = [];
   if (price !== undefined) {
-    const p = Number(price);
-    if (!Number.isFinite(p) || p < 5 || p > 500) return bad(res, 'سعر المقعد غير صالح (5–500)');
+    const p = Math.round(Number(price) * 100) / 100;
+    if (!Number.isFinite(p) || p < 0.25 || p > 500) return bad(res, 'سعر المقعد غير صالح (0.25–500)');
     sets.push('price_per_seat=?'); vals.push(p);
   }
   if (time !== undefined && String(time).trim()) { sets.push('time=?'); vals.push(String(time).trim()); }
@@ -980,7 +1018,7 @@ r.post('/ride-requests', async (req, res) => {
   try {
     const cc = u.country_code || 'JO';
     const drivers = await db.query(
-      "SELECT id FROM users WHERE role='driver' AND verified=1 AND id != ? AND (country_code=? OR country_code IS NULL) LIMIT 200",
+      "SELECT id FROM users WHERE role='driver' AND verified=1 AND COALESCE(available,1)=1 AND id != ? AND (country_code=? OR country_code IS NULL) LIMIT 200",
       [req.user.id, cc]);
     for (const d of drivers) {
       await addNotif(d.id, 'pin', 'amber', 'طلب توصيلة جديد قربك 🚕',
@@ -1122,9 +1160,11 @@ r.post('/ride-requests/:id/decline', async (req, res) => {
   if (!rr) return bad(res, 'الطلب غير موجود', 404);
   if (rr.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
   if (!['offered', 'countered'].includes(rr.status)) return bad(res, 'لا شيء لرفضه');
-  await db.execute("UPDATE ride_requests SET status='cancelled' WHERE id=?", [rr.id]);
-  await addNotif(rr.passenger_id, 'x', 'red', 'اعتذر السائق عن طلبك', `${rr.from_label} ← ${rr.to_label} — يمكنك نشر طلب جديد`, '/(passenger)/requestride');
-  res.json({ ok: true, status: 'cancelled' });
+  // سحب/رفض السائق لا يلغي طلب الراكب: يُعاد منشورًا لبقية السائقين (ذرّيًا — نفس السائق والحالة)
+  const upd = await db.execute("UPDATE ride_requests SET status='open', driver_id=NULL, offered_fare=NULL, offer_by='' WHERE id=? AND driver_id=? AND status IN ('offered','countered')", [rr.id, req.user.id]);
+  if (!upd.rowCount) return bad(res, 'تغيّرت حالة الطلب — حدّث القائمة');
+  await addNotif(rr.passenger_id, 'x', 'amber', 'اعتذر السائق عن العرض', `${rr.from_label} ← ${rr.to_label} — طلبك ما زال منشورًا لبقية السائقين`, '/(passenger)/myrequests');
+  res.json({ ok: true, status: 'open' });
 });
 
 // ===== تتبّع الباصات الحيّ (حافلة عامة/مدرسية/نقل عمال) =====
@@ -1183,6 +1223,9 @@ r.post('/bookings', async (req, res) => {
   const u = await db.queryOne('SELECT wallet, name, rating, gender, country_code FROM users WHERE id=?', [req.user.id]);
   // تطبيق تفضيل الجنس: رحلة «نساء فقط» تُحجز فقط من راكبة
   if (trip.gender_pref === 'female' && u.gender !== 'female') return bad(res, 'هذه الرحلة مخصّصة للنساء فقط');
+  // منع الحجز المكرّر (ضغط مزدوج/إعادة إرسال): حجز واحد نشط لكل راكب في الرحلة
+  const dup = await db.queryOne("SELECT id FROM requests WHERE trip_id=? AND passenger_id=? AND status IN ('pending','accepted','onboard') LIMIT 1", [trip.id, req.user.id]);
+  if (dup) return bad(res, 'لديك حجز قائم على هذه الرحلة — تابعه من «رحلاتي»', 409);
 
   // كود خصم بنسبة مئوية يُطبَّق تلقائيًا على الأجرة (إن كان صالحًا)
   let appliedPromo = null, discount = 0;
@@ -1412,7 +1455,8 @@ r.post('/threads/:id/messages', async (req, res) => {
 
 // ============ الإشعارات ============
 r.get('/notifications', async (req, res) => {
-  res.json({ notifications: await db.query('SELECT id,icon,tone,title,sub,to_route,created_at at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]) });
+  const rows = await db.query('SELECT id,icon,tone,title,sub,to_route,created_at at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+  res.json({ notifications: trRows(req, rows, ['title', 'sub']) });
 });
 
 // ============ الأماكن ============

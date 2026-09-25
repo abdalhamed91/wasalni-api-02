@@ -22,8 +22,10 @@ async function sendExpoPush(token, title, body, data) {
 // يبحث عن توكن المستخدم ويُرسل له بالقناة المناسبة (fire-and-forget — لا يوقف الطلب)
 async function pushToUser(userId, title, body, data) {
   try {
-    const u = await db.queryOne('SELECT push_token FROM users WHERE id=?', [userId]);
+    const u = await db.queryOne('SELECT push_token, lang FROM users WHERE id=?', [userId]);
     if (!u || !u.push_token) return;
+    // الإشعار المدفوع بلغة واجهة المستلم (المخزَّن يبقى عربيًا ويُترجَم عند القراءة)
+    if (u.lang === 'en') { const { toEn } = require('./i18n'); title = toEn(title); body = toEn(body); }
     if (isExpoToken(u.push_token)) await sendExpoPush(u.push_token, title, body, data);
     else await sendFcm(u.push_token, title, body, data);   // توكن FCM أصلي
   } catch (e) { /* تجاهل */ }

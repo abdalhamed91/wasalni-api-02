@@ -444,6 +444,11 @@ async function runMigrations() {
   await ensureColumn('users', 'pledge_accepted', PG ? 'INTEGER DEFAULT 0' : 'INTEGER DEFAULT 0');
   // إشعار تحديث التطبيق: رابط تنزيل اختياري يُرسَل مع الإشعار الجماعي (زر "تنزيل التحديث" بالتطبيق)
   await ensureColumn('admin_notifications', 'url', 'TEXT');
+  // لغة واجهة المستخدم (لترجمة الإشعارات المدفوعة) وتوفّر السائق لطلبات «اطلب توصيلة»
+  await ensureColumn('users', 'lang', "TEXT DEFAULT 'ar'");
+  await ensureColumn('users', 'available', PG ? 'INTEGER DEFAULT 1' : 'INTEGER DEFAULT 1');
+  // تنظيف أسماء طويلة حُفظت قبل حدّ الـ60 حرفًا (كانت تكسر تخطيط البطاقات)
+  try { await db.execute("UPDATE users SET name = SUBSTR(TRIM(name), 1, 60) WHERE LENGTH(name) > 60", []); } catch (e) {}
 }
 
 // فهارس لتسريع الاستعلامات المتكرّرة مع نمو البيانات

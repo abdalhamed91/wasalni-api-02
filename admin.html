@@ -43,6 +43,21 @@ h1,h2,h3,h4{font-family:'Cairo',sans-serif;font-weight:800}
 .grid{display:grid;gap:16px}
 .g4{grid-template-columns:repeat(4,1fr)}.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
 @media(max-width:1100px){.g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr}}
+/* الجوال: القائمة الجانبية تنزلق من اليمين بزر ☰ (كانت تنضغط لشريط مقصوص بلا تنقّل) */
+.menu-btn{display:none}
+.sb-backdrop{display:none}
+@media(max-width:760px){
+  .sidebar{position:fixed;top:0;right:0;bottom:0;z-index:50;transform:translateX(100%);transition:transform .25s;box-shadow:-8px 0 30px rgba(0,0,0,.25)}
+  body.sb-open .sidebar{transform:none}
+  body.sb-open .sb-backdrop{display:block;position:fixed;inset:0;background:rgba(10,20,38,.45);z-index:40}
+  .menu-btn{display:flex}
+  .topbar{padding:0 12px;gap:8px}
+  .topbar h2{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tb-actions{gap:6px}
+  .content{padding:12px}
+  .g4,.g3,.g2{grid-template-columns:1fr}
+  .card{padding:14px}
+}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--rad);padding:20px;box-shadow:var(--shadow)}
 .stat .lbl{color:var(--muted);font-size:12.5px;font-weight:600}
 .stat .val{font-size:28px;font-weight:800;margin-top:6px}
@@ -153,9 +168,13 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
   <div class="nav-item" onclick="logout()"><span class="ic">⏻</span> خروج</div>
 </div>
 
+<div class="sb-backdrop" onclick="toggleSb(false)"></div>
 <div class="main hidden" id="app-main">
   <div class="topbar">
-    <h2 id="pageTitle">لوحة المعلومات</h2>
+    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <div class="icon-btn menu-btn" onclick="toggleSb()" title="القائمة" aria-label="فتح القائمة">☰</div>
+      <h2 id="pageTitle">لوحة المعلومات</h2>
+    </div>
     <div class="tb-actions">
       <div class="icon-btn" onclick="refresh()" title="تحديث">↻</div>
       <div class="icon-btn" onclick="toggleTheme()" title="الوضع الليلي">◐</div>
@@ -206,8 +225,10 @@ function enterApp(){ $('#login').classList.add('hidden'); $('#app-sb').classList
   if(!S._badgeIv){ S._badgeIv=setInterval(()=>{ refreshConvBadge(); refreshSupBadge(); refreshWdBadge(); refreshStBadge(); refreshOpsBadge(); updateBadge(); },15000); } }
 
 function bindNav(){ document.querySelectorAll('.nav-item[data-page]').forEach(el=>el.onclick=()=>go(el.dataset.page)); }
+function toggleSb(v){ document.body.classList.toggle('sb-open', v); }
 function go(page){
   S.page=page;
+  document.body.classList.remove('sb-open');
   document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.page===page));
   const titles={dashboard:'لوحة المعلومات',operations:'الخريطة والعمليات',users:'المستخدمون',drivers:'السائقون',verify:'توثيق السائقين',trips:'الرحلات',bookings:'الحجوزات',finance:'المالية',withdrawals:'السحوبات',settlements:'تسويات السائقين',reports:'البلاغات',support:'الدعم',conversations:'الرسائل',promos:'العروض',notifications:'الإشعارات',countries:'الدول والتسعير',companies:'حسابات الشركات',team:'الأدوار والصلاحيات',settings:'الإعدادات'};
   $('#pageTitle').textContent=titles[page]||page;

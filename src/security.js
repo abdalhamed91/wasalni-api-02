@@ -42,7 +42,7 @@ function rateLimit({ windowMs = 60000, max = 30, message = 'محاولات كث�
     if (e.count > max) {
       const retryAfter = Math.ceil((e.reset - now) / 1000);
       res.setHeader('Retry-After', String(retryAfter));
-      return res.status(429).json({ error: message, retryAfter });
+      return res.status(429).json({ error: require('./i18n').tl(require('./i18n').langOf(req), message), retryAfter });
     }
     next();
   };

@@ -1,5 +1,6 @@
 // مصادقة وصلني — OTP + JWT (async موحّد)
 const jwt = require('jsonwebtoken');
+const { tl, langOf } = require('./i18n');
 const { db, now, ensureSeedForUser } = require('./db');
 
 const SECRET = process.env.JWT_SECRET || 'wasalni-dev-secret-change-in-production';
@@ -13,7 +14,25 @@ let sendSms = null;
 let detectProvider = () => null;
 try { const sms = require('./sms'); sendSms = sms.sendSms; if (sms.detectProvider) detectProvider = sms.detectProvider; } catch { sendSms = null; }
 
+// توحيد رقم الجوال: أرقام فقط، بلا 00 أو رمز الدولة أو الأصفار البادئة
+// (0790001111 و 790001111 و 962790001111 و +962 79 000 1111 → 790001111) — يمنع تكرار الحسابات
+function normalizePhone(phone, dial) {
+  let p = String(phone || '').replace(/\D/g, '');
+  const dd = String(dial || '').replace(/\D/g, '');
+  if (p.startsWith('00')) p = p.slice(2);
+  if (dd && p.startsWith(dd) && p.length > dd.length + 6) p = p.slice(dd.length);
+  return p.replace(/^0+/, '');
+}
+
+// يجد المستخدم بأي صيغة قديمة مخزّنة للرقم نفسه (قبل التوحيد) — الأقدم أولًا
+async function findUserByPhone(p, dial) {
+  const dd = String(dial || '').replace(/\D/g, '') || '962';
+  const rows = await db.query('SELECT * FROM users WHERE phone IN (?,?,?) ORDER BY id ASC', [p, '0' + p, dd + p]);
+  return rows[0] || null;
+}
+
 async function sendOtp(phone, dial) {
+  phone = normalizePhone(phone, dial);
   // منع إعادة الإرسال المتكرّر
   const existing = await db.queryOne('SELECT sent_at FROM otps WHERE phone=?', [phone]);
   if (existing && existing.sent_at && (now() - Number(existing.sent_at)) < OTP_RESEND_MS) {
@@ -32,7 +51,7 @@ async function sendOtp(phone, dial) {
   if (smsReady) {
     const message = `رمز التحقق في وصلني: ${code}\nصالح لمدة 5 دقائق. لا تشاركه مع أحد.`;
     try {
-      await sendSms((dial || '+966') + phone, message);
+      await sendSms((dial || '+962') + phone, message);
     } catch (e) {
       console.error('فشل إرسال SMS:', e.message);
       await db.execute('DELETE FROM otps WHERE phone=?', [phone]);
@@ -61,6 +80,7 @@ async function checkOtp(phone, code) {
 
 const CC_RE = /^[A-Z]{2}$/;
 async function verifyOtp(phone, dial, countryCode, code) {
+  phone = normalizePhone(phone, dial);
   // كود بلد بصيغة ISO 3166-1 alpha-2 فقط (حرفان) — أي شيء آخر يُتجاهل بدل تخزينه كما هو
   const cc = CC_RE.test(String(countryCode || '').toUpperCase()) ? String(countryCode).toUpperCase() : null;
   const row = await db.queryOne('SELECT code, expires_at, attempts FROM otps WHERE phone=?', [phone]);
@@ -76,7 +96,11 @@ async function verifyOtp(phone, dial, countryCode, code) {
   }
   await db.execute('DELETE FROM otps WHERE phone=?', [phone]);
 
-  let user = await db.queryOne('SELECT * FROM users WHERE phone=?', [phone]);
+  let user = await findUserByPhone(phone, dial);
+  // ترحيل صيغة قديمة (مثل 0790…) إلى الصيغة الموحّدة — إن لم يكن الرقم الموحّد مأخوذًا
+  if (user && user.phone !== phone) {
+    try { await db.execute('UPDATE users SET phone=? WHERE id=?', [phone, user.id]); user.phone = phone; } catch (e) { /* تعارض قديم — أبقِه */ }
+  }
   if (!user) {
     const { insertReturningId } = require('./db');
     const id = await insertReturningId('users', ['phone', 'dial', 'country_code', 'created_at'], [phone, dial || '+962', cc || 'JO', now()]);
@@ -196,6 +220,7 @@ async function publicUser(u) {
     pledgeAccepted: db.kind === 'postgres' ? !!u.pledge_accepted : !!Number(u.pledge_accepted),
     verified: db.kind === 'postgres' ? !!u.verified : !!Number(u.verified),
     verifyStatus: u.verify_status || 'none',
+    available: u.available == null ? true : !!Number(u.available),
     docExpiry: {
       license: u.license_expiry || '',
       vehicleReg: u.vehicle_reg_expiry || '',
@@ -207,18 +232,18 @@ async function publicUser(u) {
 async function authRequired(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'مطلوب تسجيل الدخول' });
+  if (!token) return res.status(401).json({ error: tl(langOf(req), 'مطلوب تسجيل الدخول') });
   try {
     const { uid } = jwt.verify(token, SECRET);
     const user = await db.queryOne('SELECT * FROM users WHERE id=?', [uid]);
-    if (!user) return res.status(401).json({ error: 'حساب غير موجود' });
+    if (!user || user.status === 'deleted') return res.status(401).json({ error: tl(langOf(req), 'حساب غير موجود') });
     // الإيقاف من الإدارة يُطبَّق فورًا: يُمنع الموقوف من استخدام التطبيق
-    if (user.status === 'suspended') return res.status(403).json({ error: 'تم إيقاف حسابك. تواصل مع الدعم.', suspended: true });
+    if (user.status === 'suspended') return res.status(403).json({ error: tl(langOf(req), 'تم إيقاف حسابك. تواصل مع الدعم.'), suspended: true });
     req.user = user;
     next();
   } catch {
-    return res.status(401).json({ error: 'جلسة غير صالحة' });
+    return res.status(401).json({ error: tl(langOf(req), 'جلسة غير صالحة') });
   }
 }
 
-module.exports = { sendOtp, verifyOtp, checkOtp, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin };
+module.exports = { sendOtp, verifyOtp, checkOtp, normalizePhone, publicUser, authRequired, sendEmailLoginOtp, verifyEmailLoginOtp, verifyGoogleLogin };
