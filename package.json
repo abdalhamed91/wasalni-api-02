@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test tests/unit.test.js tests/api.test.js",
+    "test:regression": "node tests/regression.js"
   },
   "license": "MIT",
   "dependencies": {

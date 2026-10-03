@@ -53,7 +53,12 @@ app.use('/uploads', express.static(path.join(DATA_DIR, 'uploads'), { maxAge: '7d
 if (!IS_PROD) app.use((req, _res, next) => { console.log(`${req.method} ${req.url}`); next(); });
 
 // نقطة فحص الصحة (يستخدمها Railway للتأكد أن الخادم حيّ)
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'wasalni-api', time: Date.now() }));
+// (يبقى 200 حتى لو تعطّلت القاعدة — انظر الحقل db — كي لا تدخل المنصّة في حلقة إعادة تشغيل)
+app.get('/health', async (_req, res) => {
+  let dbUp = false;
+  try { dbUp = !!(await require('./src/database').queryOne('SELECT 1 AS ok', [])); } catch (e) { /* غير متاحة */ }
+  res.json({ ok: true, service: 'wasalni-api', db: dbUp, uptime: Math.round(process.uptime()), time: Date.now() });
+});
 
 // خدمة لوحة الإدارة من نفس الخادم على /admin
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
@@ -118,6 +123,12 @@ app.use('/api/auth/otp/send', rateLimit({ windowMs: 60000, max: 5, message: 'ط�
 app.use('/api/auth/otp/verify', rateLimit({ windowMs: 60000, max: 10, message: 'محاولات تحقّق كثيرة، انتظر قليلاً' }));
 app.use('/api/auth/email/send', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
 app.use('/api/auth/email/verify', rateLimit({ windowMs: 60000, max: 10, message: 'محاولات تحقّق كثيرة، انتظر قليلاً' }));
+// حماية من إساءة الاستخدام: تخمين أكواد العروض، رسائل SMS/بريد مدفوعة، تحويلات المحفظة، ورفع الصور
+app.use('/api/promos/redeem', rateLimit({ windowMs: 60000, max: 10, message: 'طلبات كثيرة، انتظر قليلاً' }));
+app.use('/api/wallet/transfer', rateLimit({ windowMs: 60000, max: 10, message: 'طلبات كثيرة، انتظر قليلاً' }));
+app.use('/api/uploads', rateLimit({ windowMs: 60000, max: 20, message: 'طلبات كثيرة، انتظر قليلاً' }));
+app.use('/api/me/phone/otp', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
+app.use('/api/me/email/otp', rateLimit({ windowMs: 60000, max: 5, message: 'طلبات رمز كثيرة، انتظر قليلاً' }));
 app.use('/api/admin/login', rateLimit({ windowMs: 300000, max: 10, message: 'محاولات دخول كثيرة، انتظر قليلاً' }));
 
 app.use('/api/admin', adminRoutes);
@@ -139,8 +150,18 @@ const PORT = process.env.PORT || 4000;
 const { initDb } = require('./src/db');
 const { startDocExpiryJob } = require('./src/docexpiry');
 const { startRecurringJob } = require('./src/recurring');
+const { startRideExpiryJob } = require('./src/rideexpiry');
 function listen() {
-  app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`));
+  const server = app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`));
+  // إيقاف نظيف عند إعادة النشر (Railway يرسل SIGTERM): أنهِ الطلبات الجارية ثم اخرج
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.once(sig, () => {
+      console.log(`${sig}: إيقاف الخادم…`);
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 8000).unref();
+    });
+  }
+  try { startRideExpiryJob(); } catch (e) { console.error('rideExpiry job:', e && e.message); }
   try { startDocExpiryJob(); } catch (e) { console.error('docExpiry job:', e && e.message); }
   try { startRecurringJob(); } catch (e) { console.error('recurring job:', e && e.message); }
 }

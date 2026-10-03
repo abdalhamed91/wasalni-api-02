@@ -40,6 +40,24 @@ async function applyRating(userId, stars) {
   await db.execute('UPDATE users SET rating=?, rating_count=? WHERE id=?', [newAvg, cnt + 1, userId]);
 }
 
+// تقييم صالح: عدد صحيح 1–5 وإلا null (يمنع تسجيل تقييم بلا قيمة أو بقيمة شاذّة)
+const validStars = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 1 && n <= 5 ? n : null; };
+
+// يحجز استخدام كود عرض لمستخدم ذرّيًّا: سجلّ الاستبدال (فهرس فريد promo+user) ثم زيادة العدّاد بشرط الحدّ الأقصى.
+// يمنع الاستخدام المزدوج عند الطلبات المتزامنة. يُعيد معرّف الاستبدال أو null إن لم يتوفّر.
+async function claimPromo(promo, userId, amount) {
+  let redemptionId;
+  try { redemptionId = await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [promo.id, userId, amount, now()]); }
+  catch (e) { return null; } // استُخدم مسبقًا (فهرس فريد)
+  const upd = await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=? AND (max_uses IS NULL OR max_uses <= 0 OR used_count < max_uses)', [promo.id]);
+  if (!upd.rowCount) { await db.execute('DELETE FROM promo_redemptions WHERE id=?', [redemptionId]); return null; }
+  return redemptionId;
+}
+async function releasePromo(promoId, redemptionId) {
+  await db.execute('DELETE FROM promo_redemptions WHERE id=?', [redemptionId]);
+  await db.execute('UPDATE promos SET used_count = CASE WHEN used_count > 0 THEN used_count - 1 ELSE 0 END WHERE id=?', [promoId]);
+}
+
 // ===== هندسة المطابقة على المسار (corridor matching) =====
 const validPt = (p) => Array.isArray(p) && p[0] != null && p[1] != null && Number.isFinite(+p[0]) && Number.isFinite(+p[1]);
 function haversineKm(a, b) {
@@ -171,6 +189,7 @@ r.patch('/me', async (req, res) => {
   if (available !== undefined) await db.execute('UPDATE users SET available=? WHERE id=?', [available ? 1 : 0, req.user.id]);
   if (role && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
   if (gender && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
+  if (email != null && email !== '' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim()) || String(email).length > 120)) return bad(res, 'بريد إلكتروني غير صالح');
   if (name != null && (String(name).trim().length < 2 || String(name).trim().length > 60)) return bad(res, 'الاسم يجب أن يكون بين 2 و60 حرفًا');
   // تغيير البريد يُسقط التوثيق — لا يرث بريدٌ جديد علامة «موثّق» من البريد السابق
   if (email != null && String(email).trim().toLowerCase() !== String(req.user.email || '').trim().toLowerCase()) {
@@ -180,7 +199,7 @@ r.patch('/me', async (req, res) => {
       name = COALESCE(?, name), email = COALESCE(?, email),
       role = COALESCE(?, role), country_code = COALESCE(?, country_code), dial = COALESCE(?, dial),
       gender = COALESCE(?, gender), avatar = COALESCE(?, avatar), birth_date = COALESCE(?, birth_date)
-    WHERE id=?`, [name != null ? String(name).trim() : null, email ?? null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, birthDate ?? null, req.user.id]);
+    WHERE id=?`, [name != null ? String(name).trim() : null, email != null ? String(email).trim() : null, role ?? null, countryCode ?? null, dial ?? null, gender ?? null, avatar ?? null, birthDate ?? null, req.user.id]);
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(u) });
 });
@@ -233,6 +252,7 @@ r.post('/me/phone/verify', async (req, res) => {
 
 // ---- توثيق البريد الإلكتروني برمز يصل للبريد (devCode في وضع التجربة) ----
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const emailVerifyTries = new Map(); // userId -> محاولات خاطئة (تُصفَّر عند طلب رمز جديد)
 r.post('/me/email/otp', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(email)) return bad(res, 'بريد إلكتروني غير صالح');
@@ -240,6 +260,7 @@ r.post('/me/email/otp', async (req, res) => {
   if (taken && taken.id !== req.user.id) return bad(res, 'هذا البريد موثّق بحساب آخر');
   const code = String(Math.floor(100000 + Math.random() * 900000));
   await db.execute('UPDATE users SET email_otp=?, email_otp_exp=? WHERE id=?', [code, now() + 10 * 60 * 1000, req.user.id]);
+  emailVerifyTries.delete(req.user.id);
   const { sendEmailOtp } = require('./email');
   const r2 = await sendEmailOtp(email, code);
   res.json({ sent: true, devCode: r2.devCode || undefined });
@@ -251,7 +272,11 @@ r.post('/me/email/verify', async (req, res) => {
   const u = await db.queryOne('SELECT email_otp, email_otp_exp FROM users WHERE id=?', [req.user.id]);
   if (!u || !u.email_otp) return bad(res, 'اطلب رمز التحقّق أولًا');
   if (Number(u.email_otp_exp) < now()) return bad(res, 'انتهت صلاحية الرمز — اطلب رمزًا جديدًا');
-  if (String(u.email_otp) !== code) return bad(res, 'الرمز غير صحيح');
+  // حدّ المحاولات: رمز من 6 خانات بلا حدّ يمكن تخمينه بالقوّة الغاشمة (يُبطَل بعد 5 محاولات خاطئة)
+  const tries = (emailVerifyTries.get(req.user.id) || 0) + 1;
+  if (tries > 5) { await db.execute("UPDATE users SET email_otp='', email_otp_exp=NULL WHERE id=?", [req.user.id]); emailVerifyTries.delete(req.user.id); return bad(res, 'تجاوزت عدد المحاولات — اطلب رمزًا جديدًا', 429); }
+  if (String(u.email_otp) !== code) { emailVerifyTries.set(req.user.id, tries); return bad(res, 'الرمز غير صحيح'); }
+  emailVerifyTries.delete(req.user.id);
   await db.execute("UPDATE users SET email=?, email_verified=1, email_otp='', email_otp_exp=NULL WHERE id=?", [email, req.user.id]);
   const fresh = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   res.json({ user: await publicUser(fresh) });
@@ -269,6 +294,12 @@ r.post('/uploads', async (req, res) => {
   try { buf = Buffer.from(b64, 'base64'); } catch { return bad(res, 'بيانات صورة غير صالحة'); }
   if (!buf.length) return bad(res, 'صورة فارغة');
   if (buf.length > 6 * 1024 * 1024) return bad(res, 'حجم الصورة كبير جدًا (الحد 6 ميجابايت)');
+  // تحقّق من توقيع الملف الفعلي (PNG/JPEG/WebP) — يمنع رفع محتوى آخر (HTML/سكربت) بامتداد صورة
+  const isPng = buf.length > 8 && buf.slice(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const isJpg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  const isWebp = buf.length > 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP';
+  if (!isPng && !isJpg && !isWebp) return bad(res, 'الملف ليس صورة صالحة (PNG/JPG/WebP)');
+  e = isPng ? 'png' : isWebp ? 'webp' : 'jpg';
   const name = `${req.user.id}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${e}`;
   try { fs.writeFileSync(path.join(UPLOAD_DIR, name), buf); }
   catch (err) { return bad(res, 'تعذّر حفظ الصورة', 500); }
@@ -348,8 +379,11 @@ r.post('/wallet/topup', async (req, res) => {
     const dup = await db.queryOne('SELECT id FROM payments WHERE ref=?', [pay.id]);
     if (dup) return bad(res, 'عملية الدفع مستخدمة مسبقًا');
     amount = round2(pay.amount);
-    await db.execute('INSERT INTO payments (user_id,provider,ref,amount,created_at) VALUES (?,?,?,?,?)',
-      [req.user.id, 'moyasar', pay.id, amount, now()]);
+    // ref فريد في الجدول: الطلبان المتزامنان بنفس الدفع لا يمرّ منهما إلا واحد
+    try {
+      await db.execute('INSERT INTO payments (user_id,provider,ref,amount,created_at) VALUES (?,?,?,?,?)',
+        [req.user.id, 'moyasar', pay.id, amount, now()]);
+    } catch (e) { return bad(res, 'عملية الدفع مستخدمة مسبقًا'); }
   } else if (!IS_PROD) {
     // وضع التطوير المحلي فقط (بلا بوّابة دفع): شحن مباشر للاختبار
     if (!Number.isFinite(amount) || amount <= 0 || amount > 5000) return bad(res, 'مبلغ شحن غير صالح');
@@ -447,7 +481,9 @@ r.post('/me/settlements', async (req, res) => {
   if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'مبلغ غير صالح');
   const u = await db.queryOne('SELECT platform_dues, name FROM users WHERE id=?', [req.user.id]);
   if (amount > round2(u.platform_dues) + 0.001) return bad(res, 'المبلغ يتجاوز مستحقّاتك على المنصّة');
-  // منع تكرار طلب معلّق كبير: يُسمح بطلبات متعددة لكن ننبّه لو وُجد معلّق بنفس المبلغ
+  // مجموع التحويلات المعلّقة لا يتجاوز الدين الفعلي (يمنع تسجيل التحويل نفسه مرّات متعدّدة)
+  const pendingSum = round2((await db.queryOne("SELECT COALESCE(SUM(amount),0) s FROM settlements WHERE driver_id=? AND status='pending'", [req.user.id])).s);
+  if (pendingSum + amount > round2(u.platform_dues) + 0.001) return bad(res, 'لديك تحويلات معلّقة بانتظار التأكيد تغطّي مستحقّاتك');
   const id = await insertReturningId('settlements',
     ['driver_id', 'amount', 'reference', 'status', 'created_at'],
     [req.user.id, amount, reference, 'pending', now()]);
@@ -463,8 +499,13 @@ r.post('/wallet/transfer', async (req, res) => {
   if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'مبلغ التحويل غير صالح');
   // مطابقة مرنة للهاتف: نتجاهل الصفر البادئ ورمز الدولة بمطابقة آخر 9 خانات
   const key9 = toPhone.slice(-9);
-  let recipient = await db.queryOne('SELECT id, name FROM users WHERE phone=?', [toPhone]);
-  if (!recipient) recipient = await db.queryOne("SELECT id, name FROM users WHERE phone LIKE ?", ['%' + key9]);
+  let recipient = await db.queryOne("SELECT id, name FROM users WHERE phone=? AND status='active'", [normalizePhone(toPhone, req.user.dial)]) ||
+    await db.queryOne("SELECT id, name FROM users WHERE phone=? AND status='active'", [toPhone]);
+  if (!recipient) {
+    // مطابقة بآخر 9 خانات — فقط إن كانت النتيجة لمستخدم واحد (تجنّب التحويل لشخص خطأ عند التشابه)
+    const cands = await db.query("SELECT id, name FROM users WHERE phone LIKE ? AND status='active' LIMIT 2", ['%' + key9]);
+    if (cands.length === 1) recipient = cands[0];
+  }
   if (!recipient) return bad(res, 'لا يوجد مستخدم بهذا الرقم');
   if (recipient.id === req.user.id) return bad(res, 'لا يمكنك التحويل لنفسك');
   // اخصم من المُرسِل ذرّيًّا ثم أضف للمستلم
@@ -496,10 +537,9 @@ r.post('/promos/redeem', async (req, res) => {
   if (p.discount_type !== 'flat') return bad(res, 'هذا الكود يُطبَّق تلقائيًا عند الحجز، لا يُستبدل رصيدًا');
   const amount = round2(Number(p.discount_value));
   if (!Number.isFinite(amount) || amount <= 0) return bad(res, 'قيمة الكود غير صالحة');
-  // أضِف الرصيد وسجّل الاستبدال ذرّيًّا قدر الإمكان
+  // احجز الاستخدام ذرّيًّا أولًا (يمنع الاستبدال المزدوج بطلبين متزامنين) ثم أضِف الرصيد
+  if (!(await claimPromo(p, req.user.id, amount))) return bad(res, 'سبق أن استخدمت هذا الكود أو انتهت مرّات استخدامه');
   await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [amount, req.user.id]);
-  await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [p.id]);
-  await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [p.id, req.user.id, amount, now()]);
   await addTxn(req.user.id, 'passenger', `كود عرض: ${p.title || code}`, amount, 'in');
   await addNotif(req.user.id, 'wallet', 'green', 'تم تطبيق كود العرض 🎁', `${amount} ${await userCur(req.user.id)} أُضيفت لمحفظتك`, '/(passenger)/wallet');
   const balance = round2((await db.queryOne('SELECT wallet FROM users WHERE id=?', [req.user.id])).wallet);
@@ -596,15 +636,18 @@ r.post('/trips/:id/cancel', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   if (['completed', 'cancelled'].includes(trip.status)) return bad(res, 'لا يمكن إلغاء هذه الرحلة');
   const reason = (req.body && req.body.reason) ? String(req.body.reason).slice(0, 300) : null;
+  // حجز الإلغاء ذرّيًّا أولًا: الطلب المتكرّر/المتزامن لا يُعيد المبالغ مرّتين
+  const claim = await db.execute("UPDATE trips SET status='cancelled', cancel_reason=? WHERE id=? AND status NOT IN ('completed','cancelled')", [reason, trip.id]);
+  if (!claim.rowCount) return bad(res, 'لا يمكن إلغاء هذه الرحلة');
   // استرجاع الركّاب الذين حجزوا وأُعيد المبلغ لهم + إشعارهم
   const active = await db.query("SELECT * FROM requests WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
   for (const rq of active) {
     if (rq.passenger_id) {
       const bk = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [rq.id]);
       if (bk) {
-        await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [bk.id]);
+        const bclaim = await db.execute("UPDATE bookings SET status='cancelled' WHERE id=? AND status NOT IN ('cancelled','completed')", [bk.id]);
         // استرجاع المحفظة فقط للحجوزات المدفوعة محفظةً (النقدي لم يُخصم أصلًا)
-        if (bk.payment !== 'cash') {
+        if (bclaim.rowCount && bk.payment !== 'cash') {
           await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
           await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة ملغاة من السائق', bk.fare, 'in');
         }
@@ -613,7 +656,6 @@ r.post('/trips/:id/cancel', async (req, res) => {
     }
   }
   await db.execute("UPDATE requests SET status='cancelled' WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
-  await db.execute("UPDATE trips SET status='cancelled', cancel_reason=? WHERE id=?", [reason, trip.id]);
   res.json({ ok: true });
 });
 
@@ -651,15 +693,16 @@ async function handleRequestAction(req, res) {
   if (!q) return bad(res, 'الطلب غير موجود', 404);
   if (q.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
   if (q.status !== 'pending') return bad(res, 'الطلب لم يعد معلّقاً');
+  // انتقال الحالة ذرّيًّا: يمنع قبول/رفض الطلب نفسه مرّتين (استرجاع مزدوج للمبلغ والمقاعد)
+  const claim = await db.execute("UPDATE requests SET status=? WHERE id=? AND status='pending'", [req.params.action === 'accept' ? 'accepted' : 'rejected', q.id]);
+  if (!claim.rowCount) return bad(res, 'الطلب لم يعد معلّقاً');
   if (req.params.action === 'accept') {
     // المقاعد والمبلغ محجوزان مسبقًا — القبول يؤكّد الحجز المرتبط
-    await db.execute("UPDATE requests SET status='accepted' WHERE id=?", [q.id]);
     await db.execute("UPDATE bookings SET status='confirmed' WHERE request_id=? AND status='pending_driver'", [q.id]);
     await addNotif(req.user.id, 'check', 'green', 'قبلت طلب حجز', `${q.from_label} ← ${q.to_label}`, '/(driver)/requests');
     // أبلغ الراكب بقبول طلبه
     if (q.passenger_id) await addNotif(q.passenger_id, 'check', 'green', 'تم قبول حجزك ✓', `${q.from_label} ← ${q.to_label}`, '/(passenger)/tracking');
   } else {
-    await db.execute("UPDATE requests SET status='rejected' WHERE id=?", [q.id]);
     // أعد المقاعد المحجوزة إلى الرحلة
     await db.execute('UPDATE trips SET total_seats = total_seats + ? WHERE id=?', [q.seats, q.trip_id]);
     // استرجاع تلقائي للراكب وإلغاء الحجز المرتبط
@@ -697,7 +740,7 @@ r.post('/trips/:id/start', async (req, res) => {
 r.post('/trips/:id/location', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   const lat = Number(req.body?.lat), lng = Number(req.body?.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return bad(res, 'إحداثيات غير صالحة');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return bad(res, 'إحداثيات غير صالحة');
   await db.execute('UPDATE trips SET driver_lat=?, driver_lng=?, driver_loc_at=? WHERE id=?', [lat, lng, now(), trip.id]);
   res.json({ ok: true });
 });
@@ -775,6 +818,24 @@ r.post('/trips/:id/arrived', async (req, res) => {
 r.post('/trips/:id/complete', async (req, res) => {
   const trip = await ownTrip(req, res); if (!trip) return;
   if (trip.status !== 'live' && trip.status !== 'scheduled') return bad(res, 'الرحلة ليست جارية');
+  // حجز الإكمال ذرّيًّا أولًا: يمنع احتساب العمولة/الأرباح مرّتين عند ضغطتين متزامنتين
+  const claim = await db.execute("UPDATE trips SET status='completed', completed_at=? WHERE id=? AND status IN ('live','scheduled')", [now(), trip.id]);
+  if (!claim.rowCount) return bad(res, 'الرحلة ليست جارية');
+  // طلبات لم يقبلها السائق حتى انتهاء الرحلة: تُرفض ويُسترجع مبلغ المحفظة (لا يبقى المال محجوزًا بلا خدمة)
+  const stale = await db.query("SELECT * FROM requests WHERE trip_id=? AND status='pending'", [trip.id]);
+  for (const rq of stale) {
+    const sclaim = await db.execute("UPDATE requests SET status='rejected' WHERE id=? AND status='pending'", [rq.id]);
+    if (!sclaim.rowCount) continue;
+    const bk = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [rq.id]);
+    if (bk) {
+      await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [bk.id]);
+      if (bk.payment !== 'cash' && bk.passenger_id) {
+        await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
+        await addTxn(bk.passenger_id, 'passenger', 'استرجاع حجز لم يُقبل', bk.fare, 'in');
+      }
+    }
+    if (rq.passenger_id) await addNotif(rq.passenger_id, 'x', 'amber', 'انتهت الرحلة دون قبول حجزك', `${trip.from_label} ← ${trip.to_label}${bk && bk.payment !== 'cash' ? ' — أُعيد المبلغ لمحفظتك' : ''}`, '/(passenger)/trips');
+  }
   const driverCountry = (await db.queryOne('SELECT country_code FROM users WHERE id=?', [req.user.id]) || {}).country_code || 'JO';
   // النموذج النقدي: السائق يحصّل الأجرة كاملةً نقدًا؛ عمولة المنصّة على هذه الأجرة تصبح ديْنًا عليه (platform_dues).
   const cashGross = round2((await db.queryOne("SELECT COALESCE(SUM(fare),0) s FROM requests WHERE trip_id=? AND status IN ('onboard','accepted') AND payment = 'cash'", [trip.id])).s);
@@ -790,7 +851,6 @@ r.post('/trips/:id/complete', async (req, res) => {
     if (rq.passenger_id) await addNotif(rq.passenger_id, 'star', 'blue', 'وصلت إلى وجهتك ✓', 'قيّم رحلتك مع السائق', '/(passenger)/trips');
   }
   await db.execute("UPDATE requests SET status='dropped' WHERE trip_id=? AND status IN ('onboard','accepted')", [trip.id]);
-  await db.execute("UPDATE trips SET status='completed', completed_at=? WHERE id=?", [now(), trip.id]);
   // النقدي: أضف العمولة المستحقّة إلى ديْن السائق للمنصّة + سجّلها كمعاملة تدقيق
   if (cashCommission > 0) {
     await db.execute('UPDATE users SET platform_dues = platform_dues + ? WHERE id=?', [cashCommission, req.user.id]);
@@ -808,10 +868,40 @@ r.post('/trips/:id/complete', async (req, res) => {
   res.json({ gross: round2(cashGross + walletGross), commission, cashCollected: cashGross, cashCommission, dues: round2(u.platform_dues), earnings: round2(u.earnings) });
 });
 
+// ============ إحصاءات السائق (لوحة سريعة) ============
+r.get('/driver/stats', async (req, res) => {
+  if (req.user.role !== 'driver') return bad(res, 'للسائقين فقط', 403);
+  const id = req.user.id;
+  const one = async (sql, params = [id]) => (await db.queryOne(sql, params)) || {};
+  const trips = await one(`SELECT COUNT(*) total,
+      SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) completed,
+      SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) cancelled,
+      SUM(CASE WHEN status IN ('scheduled','live') THEN 1 ELSE 0 END) active
+    FROM trips WHERE driver_id=?`);
+  const pax = await one(`SELECT COALESCE(SUM(r.seats),0) seats, COUNT(*) bookings, COALESCE(SUM(r.fare),0) gross,
+      COALESCE(SUM(CASE WHEN r.payment='cash' THEN r.fare ELSE 0 END),0) cash
+    FROM requests r JOIN trips t ON t.id=r.trip_id WHERE t.driver_id=? AND r.status='dropped'`);
+  const me = await one('SELECT rating, rating_count, earnings, platform_dues FROM users WHERE id=?');
+  const accepted = Number((await one("SELECT COUNT(*) c FROM requests r JOIN trips t ON t.id=r.trip_id WHERE t.driver_id=? AND r.status IN ('accepted','onboard','dropped')")).c) || 0;
+  const rejected = Number((await one("SELECT COUNT(*) c FROM requests r JOIN trips t ON t.id=r.trip_id WHERE t.driver_id=? AND r.status='rejected'")).c) || 0;
+  res.json({
+    trips: { total: Number(trips.total) || 0, completed: Number(trips.completed) || 0, cancelled: Number(trips.cancelled) || 0, active: Number(trips.active) || 0 },
+    passengers: { seatsCarried: Number(pax.seats) || 0, completedBookings: Number(pax.bookings) || 0 },
+    grossFares: round2(pax.gross), cashCollected: round2(pax.cash),
+    earnings: round2(me.earnings), platformDues: round2(me.platform_dues),
+    rating: me.rating, ratingCount: Number(me.rating_count) || 0,
+    acceptanceRate: accepted + rejected ? round2(accepted / (accepted + rejected)) : null,
+    currency: curSym(req.user.country_code),
+  });
+});
+
 // ============ البلاغات ============
 r.post('/reports', async (req, res) => {
-  const { category, note, against, tripId } = req.body || {};
+  const { category, note } = req.body || {};
   if (!category) return bad(res, 'نوع البلاغ مطلوب');
+  // قيم نصّية/رقمية فقط (كائن/مصفوفة كانت تُسقط الطلب بخطأ 500)
+  const against = req.body?.against != null ? String(req.body.against).slice(0, 120) : null;
+  const tripId = Number.isInteger(Number(req.body?.tripId)) && Number(req.body.tripId) > 0 ? Number(req.body.tripId) : null;
   const u = await db.queryOne('SELECT role FROM users WHERE id=?', [req.user.id]) || {};
   const reportId = await insertReturningId('reports',
     ['reporter_id','reporter_role','against','trip_id','category','note','status','created_at'],
@@ -821,8 +911,9 @@ r.post('/reports', async (req, res) => {
 
 // زر الطوارئ (SOS) أثناء الرحلة — بلاغ فوري بأولوية عاجلة مع الموقع اللحظي، يظهر أول قائمة بلاغات الإدارة
 r.post('/sos', async (req, res) => {
-  const { tripId, lat, lng } = req.body || {};
-  const P = validPt([lat, lng]) ? [lat, lng] : null;
+  const { lat, lng } = req.body || {};
+  const tripId = Number.isInteger(Number(req.body?.tripId)) && Number(req.body.tripId) > 0 ? Number(req.body.tripId) : null;
+  const P = validPt([lat, lng]) && Math.abs(+lat) <= 90 && Math.abs(+lng) <= 180 ? [+lat, +lng] : null;
   const u = await db.queryOne('SELECT role, name FROM users WHERE id=?', [req.user.id]) || {};
   const reportId = await insertReturningId('reports',
     ['reporter_id', 'reporter_role', 'trip_id', 'category', 'note', 'status', 'priority', 'lat', 'lng', 'created_at'],
@@ -1239,22 +1330,32 @@ r.post('/bookings', async (req, res) => {
     if (Number(p.max_uses) > 0 && Number(p.used_count) >= Number(p.max_uses)) return bad(res, 'انتهت مرّات استخدام الكود');
     const used = await db.queryOne('SELECT id FROM promo_redemptions WHERE promo_id=? AND user_id=?', [p.id, req.user.id]);
     if (used) return bad(res, 'سبق أن استخدمت هذا الكود');
-    discount = round2(baseFare * Number(p.discount_value));
+    // النسبة بالمئة كما تُدخَل في لوحة الإدارة (10 = 10%) — وبحدّ أقصى 100% كي لا تتجاوز الخصم قيمة الأجرة
+    const pct = Number(p.discount_value);
+    if (!Number.isFinite(pct) || pct <= 0) return bad(res, 'قيمة كود الخصم غير صالحة');
+    discount = Math.min(baseFare, round2(baseFare * Math.min(pct, 100) / 100));
     appliedPromo = p;
   }
-  const fare = round2(baseFare - discount);
+  const fare = round2(Math.max(0, baseFare - discount));
   if (!cash && u.wallet < fare) return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك أو اختر الدفع نقدًا');
+  // احجز استخدام الكود ذرّيًّا قبل أي خصم (يمنع استخدامه مرّتين بحجزين متزامنين) ويُحرَّر إن فشل الحجز
+  let promoClaim = null;
+  if (appliedPromo && discount > 0) {
+    promoClaim = await claimPromo(appliedPromo, req.user.id, discount);
+    if (!promoClaim) return bad(res, 'سبق أن استخدمت هذا الكود أو انتهت مرّات استخدامه');
+  }
 
   // 1) حجز المقاعد ذرّيًا (يمنع البيع الزائد عند الحجز المتزامن)
   const seatRes = await db.execute(
     "UPDATE trips SET total_seats = total_seats - ? WHERE id=? AND status IN ('scheduled','live') AND total_seats >= ?",
     [s, trip.id, s]);
-  if (!seatRes.rowCount) return bad(res, `المقاعد المتاحة لم تعد كافية`);
+  if (!seatRes.rowCount) { if (promoClaim) await releasePromo(appliedPromo.id, promoClaim); return bad(res, `المقاعد المتاحة لم تعد كافية`); }
   // 2) الدفع: نقدًا = بلا خصم محفظة (يُحصّل من السائق)؛ محفظة = خصم ذرّي وإلا أعد المقاعد
   if (!cash) {
     const payRes = await db.execute('UPDATE users SET wallet = wallet - ? WHERE id=? AND wallet >= ?', [fare, req.user.id, fare]);
     if (!payRes.rowCount) {
       await db.execute('UPDATE trips SET total_seats = total_seats + ? WHERE id=?', [s, trip.id]);
+      if (promoClaim) await releasePromo(appliedPromo.id, promoClaim);
       return bad(res, 'الرصيد غير كافٍ — اشحن محفظتك أو اختر الدفع نقدًا');
     }
     await addTxn(req.user.id, 'passenger', `رحلة · ${trip.from_label} ← ${trip.to_label}`, fare, 'out');
@@ -1272,9 +1373,7 @@ r.post('/bookings', async (req, res) => {
     ['passenger_id','request_id','driver','driver_rating','car','plate','from_label','to_label','time','seats','fare','preferences','pax_note','status','payment','created_at'],
     [req.user.id, requestId, trip.driver_name, trip.driver_rating, car, trip.plate || '', trip.from_label, trip.to_label, trip.time, s, fare, prefsJson, paxNote, 'pending_driver', pm, now()]);
   // سجّل استخدام كود الخصم (مرّة واحدة لكل مستخدم)
-  if (appliedPromo && discount > 0) {
-    await db.execute('UPDATE promos SET used_count = used_count + 1 WHERE id=?', [appliedPromo.id]);
-    await insertReturningId('promo_redemptions', ['promo_id', 'user_id', 'amount', 'created_at'], [appliedPromo.id, req.user.id, discount, now()]);
+  if (promoClaim) {
     await addNotif(req.user.id, 'wallet', 'green', 'طُبّق كود الخصم 🎁', `وفّرت ${discount} ${await userCur(req.user.id)} على رحلتك`, '/(passenger)/wallet');
   }
   // المبلغ محجوز (مخصوم) بانتظار موافقة السائق — يُسترجع تلقائيًا عند الرفض
@@ -1295,10 +1394,18 @@ r.post('/bookings/:id/status', async (req, res) => {
   if (!b) return bad(res, 'الحجز غير موجود', 404);
   if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
   const status = String(req.body?.status || '');
-  const allowed = ['enroute', 'intrip', 'completed', 'cancelled'];
+  // الراكب لا يُنهي الرحلة بنفسه — الإكمال حصرًا من السائق (يترتّب عليه حساب العمولة والأرباح)
+  const allowed = ['enroute', 'intrip', 'cancelled'];
   if (!allowed.includes(status)) return bad(res, 'حالة غير صالحة');
   if (['completed', 'cancelled'].includes(b.status)) return bad(res, 'الحجز منتهٍ');
-  await db.execute('UPDATE bookings SET status=? WHERE id=?', [status, b.id]);
+  if (status === 'cancelled' && b.request_id) {
+    // لا يُلغى الحجز بعد صعود الراكب أو انتهاء الرحلة (وإلا استرجع أجرة رحلة ركبها فعلًا)
+    const rq0 = await db.queryOne('SELECT status FROM requests WHERE id=?', [b.request_id]);
+    if (rq0 && !['pending', 'accepted'].includes(rq0.status)) return bad(res, 'لا يمكن إلغاء الحجز بعد انطلاق الرحلة');
+  }
+  // انتقال الحالة ذرّيًّا: الإلغاء المتكرّر لا يُعيد المبلغ مرّتين
+  const claim = await db.execute("UPDATE bookings SET status=? WHERE id=? AND status NOT IN ('completed','cancelled')", [status, b.id]);
+  if (!claim.rowCount) return bad(res, 'الحجز منتهٍ');
   let wallet;
   if (status === 'cancelled') {
     // استرجاع المحفظة فقط للحجوزات المدفوعة محفظةً (النقدي لم يُخصم)
@@ -1328,6 +1435,9 @@ r.post('/bookings/:id/rate', async (req, res) => {
   if (!b) return bad(res, 'الحجز غير موجود', 404);
   if (b.passenger_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
   if (Number(b.rated)) return bad(res, 'سبق تقييم هذه الرحلة');
+  const stars = validStars(req.body?.stars);
+  if (!stars) return bad(res, 'التقييم يجب أن يكون من 1 إلى 5');
+  if (b.status !== 'completed') return bad(res, 'يمكن التقييم بعد اكتمال الرحلة فقط');
   // أوجد سائق الرحلة عبر الطلب المرتبط
   let driverId = null;
   if (b.request_id) {
@@ -1335,13 +1445,14 @@ r.post('/bookings/:id/rate', async (req, res) => {
     driverId = rq ? rq.driver_id : null;
   }
   if (!driverId) return bad(res, 'تعذّر تحديد السائق');
-  await applyRating(driverId, req.body?.stars);
-  await db.execute('UPDATE bookings SET rated=1 WHERE id=?', [b.id]);
+  // علّم الحجز «مُقيَّم» ذرّيًّا قبل احتساب التقييم (يمنع التقييم المزدوج بطلبين متزامنين)
+  const rclaim = await db.execute('UPDATE bookings SET rated=1 WHERE id=? AND COALESCE(rated,0)=0', [b.id]);
+  if (!rclaim.rowCount) return bad(res, 'سبق تقييم هذه الرحلة');
+  await applyRating(driverId, stars);
   // خزّن المراجعة (وسوم + تعليق) للأرشفة والإشراف
-  const stars = Math.max(1, Math.min(5, Math.round(Number(req.body?.stars) || 0)));
   const tags = Array.isArray(req.body?.tags) ? JSON.stringify(req.body.tags.slice(0, 8)) : null;
   const comment = req.body?.comment ? String(req.body.comment).slice(0, 400) : null;
-  if (stars) await insertReturningId('reviews',
+  await insertReturningId('reviews',
     ['target_id','reviewer_id','booking_id','stars','tags','comment','created_at'],
     [driverId, req.user.id, b.id, stars, tags, comment, now()]);
   res.json({ ok: true });
@@ -1353,13 +1464,16 @@ r.post('/requests/:id/rate', async (req, res) => {
   if (q.driver_id !== req.user.id) return bad(res, 'غير مصرّح', 403);
   if (Number(q.rated)) return bad(res, 'سبق التقييم');
   if (!q.passenger_id) return bad(res, 'لا يمكن تقييم هذا الراكب');
-  await applyRating(q.passenger_id, req.body?.stars);
-  await db.execute('UPDATE requests SET rated=1 WHERE id=?', [q.id]);
+  const stars = validStars(req.body?.stars);
+  if (!stars) return bad(res, 'التقييم يجب أن يكون من 1 إلى 5');
+  if (q.status !== 'dropped') return bad(res, 'يمكن التقييم بعد إنزال الراكب فقط');
+  const rclaim = await db.execute('UPDATE requests SET rated=1 WHERE id=? AND COALESCE(rated,0)=0', [q.id]);
+  if (!rclaim.rowCount) return bad(res, 'سبق التقييم');
+  await applyRating(q.passenger_id, stars);
   // خزّن المراجعة (وسوم + تعليق) — الهدف الراكب، المُقيِّم السائق
-  const stars = Math.max(1, Math.min(5, Math.round(Number(req.body?.stars) || 0)));
   const tags = Array.isArray(req.body?.tags) ? JSON.stringify(req.body.tags.slice(0, 8)) : null;
   const comment = req.body?.comment ? String(req.body.comment).slice(0, 400) : null;
-  if (stars) await insertReturningId('reviews',
+  await insertReturningId('reviews',
     ['target_id','reviewer_id','booking_id','stars','tags','comment','created_at'],
     [q.passenger_id, req.user.id, null, stars, tags, comment, now()]);
   res.json({ ok: true });
@@ -1455,8 +1569,20 @@ r.post('/threads/:id/messages', async (req, res) => {
 
 // ============ الإشعارات ============
 r.get('/notifications', async (req, res) => {
-  const rows = await db.query('SELECT id,icon,tone,title,sub,to_route,created_at at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
-  res.json({ notifications: trRows(req, rows, ['title', 'sub']) });
+  const rows = await db.query('SELECT id,icon,tone,title,sub,to_route,read_at,created_at at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+  const unread = Number((await db.queryOne('SELECT COUNT(*) c FROM notifications WHERE user_id=? AND read_at IS NULL', [req.user.id])).c) || 0;
+  res.json({ notifications: trRows(req, rows.map((n) => ({ ...n, read: n.read_at != null })), ['title', 'sub']), unread });
+});
+// تعليم الإشعارات كمقروءة: كلها (بلا ids) أو قائمة محدّدة {ids:[…]} — لمستخدمها فقط
+r.post('/notifications/read', async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 200) : null;
+  if (ids && ids.length) {
+    await db.execute(`UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, [now(), req.user.id, ...ids]);
+  } else if (!req.body?.ids) {
+    await db.execute('UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL', [now(), req.user.id]);
+  }
+  const unread = Number((await db.queryOne('SELECT COUNT(*) c FROM notifications WHERE user_id=? AND read_at IS NULL', [req.user.id])).c) || 0;
+  res.json({ ok: true, unread });
 });
 
 // ============ الأماكن ============

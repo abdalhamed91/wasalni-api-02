@@ -447,6 +447,8 @@ async function runMigrations() {
   // لغة واجهة المستخدم (لترجمة الإشعارات المدفوعة) وتوفّر السائق لطلبات «اطلب توصيلة»
   await ensureColumn('users', 'lang', "TEXT DEFAULT 'ar'");
   await ensureColumn('users', 'available', PG ? 'INTEGER DEFAULT 1' : 'INTEGER DEFAULT 1');
+  // قراءة الإشعارات: وقت القراءة (NULL = غير مقروء)
+  await ensureColumn('notifications', 'read_at', PG ? 'BIGINT' : 'INTEGER');
   // تنظيف أسماء طويلة حُفظت قبل حدّ الـ60 حرفًا (كانت تكسر تخطيط البطاقات)
   try { await db.execute("UPDATE users SET name = SUBSTR(TRIM(name), 1, 60) WHERE LENGTH(name) > 60", []); } catch (e) {}
 }
@@ -471,6 +473,8 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_reports_priority ON reports(priority)',
   'CREATE INDEX IF NOT EXISTS idx_settlements_driver ON settlements(driver_id)',
   'CREATE INDEX IF NOT EXISTS idx_settlements_status ON settlements(status)',
+  // كود العرض يُستخدم مرّة واحدة لكل مستخدم — يفرضه المحرّك لا الكود فقط (يمنع السباق بطلبين متزامنين)
+  'CREATE UNIQUE INDEX IF NOT EXISTS uq_promo_redemptions ON promo_redemptions(promo_id, user_id)',
 ];
 
 async function initSchema() {
