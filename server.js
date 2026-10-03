@@ -57,13 +57,12 @@ if (!IS_PROD) app.use((req, _res, next) => { console.log(`${req.method} ${req.ur
 app.get('/health', async (_req, res) => {
   let dbUp = false;
   try { dbUp = !!(await require('./src/database').queryOne('SELECT 1 AS ok', [])); } catch (e) { /* غير متاحة */ }
-  res.json({ ok: true, service: 'wasalni-api', db: dbUp, uptime: Math.round(process.uptime()), time: Date.now() });
+  res.json({ ok: true, service: 'wasalni-api', version: require('./package.json').version, db: dbUp, uptime: Math.round(process.uptime()), time: Date.now() });
 });
 
-// خدمة لوحة الإدارة من نفس الخادم على /admin
-app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-// تطبيق الويب (للمستخدمين) — مربوط تلقائيًّا بهذا الخادم
-app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'webapp.html')));
+// لوحة الإدارة على /admin وتطبيق الويب على /app (مضغوطان بـgzip مع ETag) + خطوط التطبيق + الجذر → /app
+const webstatic = require('./src/webstatic');
+webstatic.mount(app, __dirname);
 // سياسة الخصوصية والشروط (روابط عامة مطلوبة لمتجر Google Play)
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
@@ -134,13 +133,22 @@ app.use('/api/admin/login', rateLimit({ windowMs: 300000, max: 10, message: 'م�
 app.use('/api/admin', adminRoutes);
 app.use('/api', routes);
 
+// مسارات التطبيق العميقة (/home …) تُخدم بصفحة التطبيق كي لا يعطي تحديث الصفحة JSON خامًا
+app.use(webstatic.spaFallback(__dirname));
+
 // 404 موحّد
 app.use((_req, res) => res.status(404).json({ error: 'المسار غير موجود' }));
 
 // معالج أخطاء موحّد
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
+  // أخطاء العميل (JSON تالف، حجم زائد، CORS) تُردّ بكودها الصحيح لا 500
+  const { tl, langOf } = require('./src/i18n');
+  const L = langOf(req);
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: tl(L, 'بيانات الطلب غير صالحة (JSON)') });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ error: tl(L, 'حجم الطلب كبير جدًا') });
+  if (err && /^CORS:/.test(err.message || '')) return res.status(403).json({ error: tl(L, 'مصدر غير مسموح') });
   console.error('خطأ غير متوقع:', (err && err.stack) || err);
-  res.status(500).json({ error: 'خطأ داخلي في الخادم' });
+  res.status(500).json({ error: tl(L, 'خطأ داخلي في الخادم') });
 });
 
 const PORT = process.env.PORT || 4000;
@@ -152,6 +160,13 @@ const { startDocExpiryJob } = require('./src/docexpiry');
 const { startRecurringJob } = require('./src/recurring');
 const { startRideExpiryJob } = require('./src/rideexpiry');
 function listen() {
+  // تنبيهات إطلاق مهمّة تظهر في سجلّ الإنتاج
+  if (IS_PROD) {
+    const sms = (() => { try { return require('./src/sms').detectProvider(); } catch { return null; } })();
+    if (!sms) console.warn('🚨 لا يوجد مزوّد SMS (UNIFONIC_APPSID أو TWILIO_*): رمز التحقق يُعاد في الاستجابة ويُعرض بالتطبيق — أي شخص يستطيع الدخول بأي رقم. اضبط مزوّد SMS قبل الإطلاق العام.');
+    if (!process.env.CORS_ORIGIN) console.warn('⚠️ CORS_ORIGIN غير مضبوط: الخادم يقبل الطلبات من أي موقع. قيّده بنطاقاتك.');
+    if (!process.env.DATABASE_URL) console.warn('⚠️ DATABASE_URL غير مضبوط: SQLite على قرص قد يُفقد عند إعادة النشر ما لم يكن Volume دائمًا.');
+  }
   const server = app.listen(PORT, () => console.log(`✅ وصلني API يعمل على http://localhost:${PORT}/api`));
   // إيقاف نظيف عند إعادة النشر (Railway يرسل SIGTERM): أنهِ الطلبات الجارية ثم اخرج
   for (const sig of ['SIGTERM', 'SIGINT']) {

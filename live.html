@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl"><head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="robots" content="noindex,nofollow"/>
 <title>تتبّع رحلة وصلني</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
@@ -24,10 +25,17 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
   var token = location.pathname.split('/').filter(Boolean).pop();
-  var map = L.map('map',{zoomControl:true,attributionControl:false}).setView([31.95,35.93],12);
-  L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=ar&x={x}&y={y}&z={z}',{subdomains:['0','1','2','3'],maxZoom:20}).addTo(map);
+  // الخريطة اختيارية: إن تعذّر تحميل Leaflet (شبكة/حظر) يبقى نص الحالة والمسار يعمل بدل أن يتجمّد الصفحة
+  var map = null;
+  if (typeof L !== 'undefined') {
+    map = L.map('map',{zoomControl:true,attributionControl:false}).setView([31.95,35.93],12);
+    L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=ar&x={x}&y={y}&z={z}',{subdomains:['0','1','2','3'],maxZoom:20}).addTo(map);
+  } else {
+    document.getElementById('map').innerHTML = '<div style="color:#fff;text-align:center;padding:40px 20px;font-size:14px">تعذّر تحميل الخريطة — تبقى حالة الرحلة أدناه محدّثة.</div>';
+  }
   var startM=null,endM=null,car=null,line=null,fitted=false,routed=false;
   function setMarkers(f,t){
+    if(!map)return;
     if(f&&!startM){startM=L.circleMarker(f,{radius:8,color:'#fff',weight:3,fillColor:'#1E5BC2',fillOpacity:1}).addTo(map);}
     if(t&&!endM){endM=L.circleMarker(t,{radius:8,color:'#fff',weight:3,fillColor:'#FF6320',fillOpacity:1}).addTo(map);}
     if(f&&t&&!line){line=L.polyline([f,t],{color:'#1E5BC2',weight:4,opacity:.85,dashArray:'6,8'}).addTo(map);}
@@ -49,18 +57,19 @@
     }).catch(function(){ routed=false; /* يُعاد عند الاستطلاع التالي */ });
   }
   function moveCar(p){
+    if(!map)return;
     if(!car){car=L.marker(p,{icon:L.divIcon({className:'',html:'<div class=car></div>',iconSize:[20,20]})}).addTo(map);map.setView(p,15);}
     else{car.setLatLng(p);}
   }
   var STATUS={scheduled:'بانتظار انطلاق الرحلة',live:'الرحلة جارية الآن 🚗',completed:'اكتملت الرحلة ✓',cancelled:'أُلغيت الرحلة'};
   function poll(){
     fetch('/api/live/'+token).then(function(r){return r.json();}).then(function(d){
-      if(d.error){document.getElementById('status').textContent='الرابط غير صالح أو انتهت الرحلة.';return;}
+      if(d.error){document.getElementById('status').textContent='الرابط غير صالح أو انتهت الرحلة.';document.getElementById('route').textContent='';return;}
       if(d.fromCoord&&d.fromCoord[0]!=null)setMarkers(d.fromCoord,d.toCoord);
       if(d.driver&&d.driver.length===2)moveCar(d.driver);
       document.getElementById('status').textContent=(STATUS[d.status]||'تتبّع الرحلة')+' · السائق: '+(d.driverName||'');
       document.getElementById('route').textContent=(d.from||'')+'  ←  '+(d.to||'');
-    }).catch(function(){});
+    }).catch(function(){ document.getElementById('status').textContent='تعذّر الاتصال — سنعيد المحاولة تلقائيًا…'; });
   }
   poll(); setInterval(poll,5000);
 </script></body></html>

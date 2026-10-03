@@ -24,6 +24,18 @@ async function startServer() {
     JWT_SECRET: 'test-jwt-secret', ADMIN_SECRET, NODE_ENV: 'test',
   };
   delete env.DATABASE_URL; delete env.MOYASAR_SECRET_KEY; delete env.MOYASAR_PUBLISHABLE_KEY;
+  // TEST_PG_URL (مثال: postgres://postgres:pw@localhost:5432/postgres) → يشغّل الاختبارات على PostgreSQL
+  // بقاعدة جديدة لكل تشغيل بدل SQLite (يكشف الفروق بين المحرّكين وسباقات التزامن الحقيقية).
+  let pgDrop = null;
+  if (process.env.TEST_PG_URL) {
+    const { Client } = require('pg');
+    const name = 'wasalni_t_' + process.pid + '_' + Date.now();
+    const admin = new Client({ connectionString: process.env.TEST_PG_URL });
+    await admin.connect(); await admin.query(`CREATE DATABASE ${name}`); await admin.end();
+    const u = new URL(process.env.TEST_PG_URL); u.pathname = '/' + name;
+    env.DATABASE_URL = u.toString();
+    pgDrop = async () => { const c = new Client({ connectionString: process.env.TEST_PG_URL }); await c.connect(); await c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); await c.end(); };
+  }
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   child.stdout.on('data', (d) => { log += d; });
@@ -36,8 +48,8 @@ async function startServer() {
   }
   const api = makeClient(origin);
   return {
-    origin, api, dbPath: env.DB_PATH, log: () => log,
-    async stop() { child.kill(); await new Promise((r) => child.once('exit', r)); fs.rmSync(dir, { recursive: true, force: true }); },
+    origin, api, dbPath: env.DB_PATH, env, log: () => log,
+    async stop() { child.kill(); await new Promise((r) => child.once('exit', r)); fs.rmSync(dir, { recursive: true, force: true }); if (pgDrop) await pgDrop(); },
   };
 }
 

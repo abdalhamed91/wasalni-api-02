@@ -122,7 +122,7 @@ async function verifyOtp(phone, dial, countryCode, code) {
 // ---------- الدخول أو التسجيل بالبريد الإلكتروني (بديل للهاتف) ----------
 // يرسل رمزًا لأي بريد صالح؛ عند التحقّق: يدخل الحساب الموجود بهذا البريد،
 // أو يُنشئ حسابًا جديدًا (تسجيل) إن لم يوجد — تمامًا كما يفعل رمز الهاتف.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@<>"'`]+@[^\s@<>"'`]+\.[^\s@<>"'`]+$/;
 async function sendEmailLoginOtp(email) {
   const e = String(email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(e)) return { error: 'بريد إلكتروني غير صالح' };

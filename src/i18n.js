@@ -33,6 +33,11 @@ const EXACT = {
   'محاولات تحقّق كثيرة، انتظر قليلاً': 'Too many attempts — please wait a moment',
   'طلبات كثيرة، انتظر قليلاً': 'Too many requests — please wait a moment',
   // ---- إضافات المراجعة الأخيرة ----
+  'انتهت صلاحية رابط التتبّع': 'This tracking link has expired',
+  'بيانات الطلب غير صالحة (JSON)': 'Invalid request data (JSON)',
+  'حجم الطلب كبير جدًا': 'Request is too large',
+  'مصدر غير مسموح': 'Origin not allowed',
+  'خطأ داخلي في الخادم': 'Internal server error',
   'سبق أن استخدمت هذا الكود أو انتهت مرّات استخدامه': 'You already used this code, or it has run out of uses',
   'قيمة كود الخصم غير صالحة': 'Invalid promo code value',
   'لا يمكن إلغاء الحجز بعد انطلاق الرحلة': "You can't cancel a booking after the trip has started",

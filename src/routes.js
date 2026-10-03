@@ -132,7 +132,11 @@ r.get('/live/:token', async (req, res) => {
   if (!b) return bad(res, 'رابط غير صالح', 404);
   let trip = null;
   if (b.request_id) trip = await db.queryOne('SELECT t.* FROM trips t JOIN requests r ON r.trip_id=t.id WHERE r.id=?', [b.request_id]);
-  const hasLoc = trip && trip.driver_lat != null && trip.driver_lng != null;
+  // خصوصية: رابط التتبّع العام ينتهي بعد 6 ساعات من اكتمال/إلغاء الرحلة، ولا يكشف الموقع بعد انتهائها
+  const ended = (trip ? ['completed', 'cancelled'].includes(trip.status) : ['completed', 'cancelled'].includes(b.status));
+  const endedAt = Number((trip && (trip.completed_at || trip.started_at)) || b.created_at) || 0;
+  if (ended && now() - endedAt > 6 * 3600 * 1000) return bad(res, 'انتهت صلاحية رابط التتبّع', 404);
+  const hasLoc = !ended && trip && trip.driver_lat != null && trip.driver_lng != null;
   const firstName = String(b.driver || 'السائق').split(' ')[0];
   res.json({
     status: trip ? trip.status : b.status,
@@ -189,7 +193,7 @@ r.patch('/me', async (req, res) => {
   if (available !== undefined) await db.execute('UPDATE users SET available=? WHERE id=?', [available ? 1 : 0, req.user.id]);
   if (role && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
   if (gender && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
-  if (email != null && email !== '' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim()) || String(email).length > 120)) return bad(res, 'بريد إلكتروني غير صالح');
+  if (email != null && email !== '' && (!/^[^\s@<>"'`]+@[^\s@<>"'`]+\.[^\s@<>"'`]+$/.test(String(email).trim()) || String(email).length > 120)) return bad(res, 'بريد إلكتروني غير صالح');
   if (name != null && (String(name).trim().length < 2 || String(name).trim().length > 60)) return bad(res, 'الاسم يجب أن يكون بين 2 و60 حرفًا');
   // تغيير البريد يُسقط التوثيق — لا يرث بريدٌ جديد علامة «موثّق» من البريد السابق
   if (email != null && String(email).trim().toLowerCase() !== String(req.user.email || '').trim().toLowerCase()) {
@@ -251,7 +255,7 @@ r.post('/me/phone/verify', async (req, res) => {
 });
 
 // ---- توثيق البريد الإلكتروني برمز يصل للبريد (devCode في وضع التجربة) ----
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@<>"'`]+@[^\s@<>"'`]+\.[^\s@<>"'`]+$/;
 const emailVerifyTries = new Map(); // userId -> محاولات خاطئة (تُصفَّر عند طلب رمز جديد)
 r.post('/me/email/otp', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -309,13 +313,21 @@ r.post('/uploads', async (req, res) => {
 // ============ تقديم طلب توثيق السائق ============
 r.post('/me/verify-request', async (req, res) => {
   const { idNumber, birthDate, city, docs, serviceType } = req.body || {};
-  const docsJson = docs && typeof docs === 'object' ? JSON.stringify(docs) : null;
+  // مستندات التوثيق: روابط صور من خادمنا (/uploads/..) أو https فقط — تُعرض في لوحة الإدارة، فلا نقبل نصًّا حرًّا
+  const okDoc = (v) => typeof v === 'string' && (/^\/uploads\/[\w.-]+$/.test(v) || /^https:\/\/[^\s"'<>]{1,500}$/.test(v));
+  let cleanDocs = null;
+  if (docs && typeof docs === 'object' && !Array.isArray(docs)) {
+    cleanDocs = {};
+    for (const [k, v] of Object.entries(docs).slice(0, 12)) if (/^\w{1,30}$/.test(k) && okDoc(v)) cleanDocs[k] = v;
+  }
+  const docsJson = cleanDocs ? JSON.stringify(cleanDocs) : null;
+  const clip = (v, n) => (v == null ? null : String(v).trim().slice(0, n));
   const st = ['carpool', 'public_bus', 'school_bus', 'workers'].includes(serviceType) ? serviceType : null;
   await db.execute(`UPDATE users SET
       id_number = COALESCE(?, id_number), birth_date = COALESCE(?, birth_date),
       city = COALESCE(?, city), docs = COALESCE(?, docs), service_type = COALESCE(?, service_type), role = 'driver',
       verify_status = 'submitted', verify_submitted_at = ?
-    WHERE id=?`, [idNumber ?? null, birthDate ?? null, city ?? null, docsJson, st, now(), req.user.id]);
+    WHERE id=?`, [clip(idNumber, 30), clip(birthDate, 20), clip(city, 60), docsJson, st, now(), req.user.id]);
   // أبلغ السائق أن طلبه قيد المراجعة
   await addNotif(req.user.id, 'clock', 'amber', 'طلب التوثيق قيد المراجعة', 'سنراجع بياناتك ونعلمك بالنتيجة قريبًا', '/(driver)/ddocs');
   const u = await db.queryOne('SELECT * FROM users WHERE id=?', [req.user.id]);
@@ -547,9 +559,19 @@ r.post('/promos/redeem', async (req, res) => {
 });
 
 // ============ مسارات السائق ============
+// في الجدول total_seats = المقاعد «المتبقّية» (تنقص عند الحجز). واجهة السائق تعرضه كسعة الرحلة
+// («2/4 محجوز») وترسله عند تعديل المقاعد كسعة إجمالية، فنُعيد له السعة الفعلية (متبقّي + محجوز)
+// ونضيف seats_left للمتبقّي — وإلا ظهر «0/2» لرحلة سعتها 3 فيها حجز، وقلّص التعديل سعتها دون قصد.
+const HELD_SEAT_STATUSES = ['pending', 'accepted', 'onboard', 'dropped'];
+function withCapacity(trip) {
+  const held = (trip.requests || []).filter((q) => HELD_SEAT_STATUSES.includes(q.status)).reduce((a, q) => a + (Number(q.seats) || 0), 0);
+  trip.seats_left = Number(trip.total_seats);   // على PostgreSQL تعود الأعمدة BIGINT نصًّا — نوحّدها أرقامًا
+  trip.total_seats = trip.seats_left + held;
+  return trip;
+}
 r.get('/trips', async (req, res) => {
   const trips = await db.query('SELECT * FROM trips WHERE driver_id=? ORDER BY created_at DESC', [req.user.id]);
-  for (const t of trips) t.requests = await db.query('SELECT * FROM requests WHERE trip_id=?', [t.id]);
+  for (const t of trips) { t.requests = await db.query('SELECT * FROM requests WHERE trip_id=?', [t.id]); withCapacity(t); }
   res.json({ trips });
 });
 
@@ -567,7 +589,7 @@ r.post('/trips', async (req, res) => {
   const trip = await db.queryOne('SELECT * FROM trips WHERE id=?', [tripId]);
   trip.requests = [];
   notifyRouteAlerts(trip); // بلا انتظار — لا يؤخّر استجابة النشر
-  res.status(201).json({ trip });
+  res.status(201).json({ trip: withCapacity(trip) });
 });
 
 // يتحقّق من حقول السعر/المقاعد/النوع المشتركة بين نشر رحلة فورية والقالب المتكرّر
@@ -685,7 +707,7 @@ r.patch('/trips/:id', async (req, res) => {
   await db.execute(`UPDATE trips SET ${sets.join(', ')} WHERE id=?`, vals);
   const updated = await db.queryOne('SELECT * FROM trips WHERE id=?', [trip.id]);
   updated.requests = await db.query('SELECT * FROM requests WHERE trip_id=?', [trip.id]);
-  res.json({ trip: updated });
+  res.json({ trip: withCapacity(updated) });
 });
 
 async function handleRequestAction(req, res) {
@@ -975,7 +997,7 @@ r.get('/rides/search', async (req, res) => {
 
   // تطبيع: إزالة التشكيل العربي (عمّان=عمان) والمسافات والتطويل
   const norm = (x) => (x || '').toString().trim().replace(/[ً-ْٰـ]/g, '').replace(/\s+/g, '');
-  const matchLabel = (term) => { const q = norm(term); return (t) => { const a = norm(t.to_label), b = norm(t.from_label); return (!!a && (a.includes(q) || q.includes(a))) || (!!b && (b.includes(q) || q.includes(b))); }; };
+  const matchLabel = (term) => { const q = norm(term); if (!q) return () => false; return (t) => { const a = norm(t.to_label), b = norm(t.from_label); return (!!a && (a.includes(q) || q.includes(a))) || (!!b && (b.includes(q) || q.includes(b))); }; };
   if (country) trips = trips.filter(t => (t.driver_country || '').toUpperCase() === country);
   if (femaleOnly) trips = trips.filter(t => t.driver_gender === 'female' || t.gender_pref === 'female');
 
@@ -984,6 +1006,9 @@ r.get('/rides/search', async (req, res) => {
   let matchInfo = new Map();
   const hasGeo = !!(O || D);
   const hasText = !!(to || city);
+  // وُجّهت وجهة (إحداثيات أو نص)؟ حينها لا تكفي قرب نقطة الانطلاق وحدها لإظهار الرحلة
+  // (كان البحث عن «إربد» يُظهر رحلات الزرقاء لمجرد أنها تنطلق قرب موقع الراكب)
+  const destSpecified = !!(D || hasText);
   if (hasGeo || hasText) {
     trips = trips.filter(t => {
       const A = [t.from_lat, t.from_lng], B = [t.to_lat, t.to_lng];
@@ -995,14 +1020,15 @@ r.get('/rides/search', async (req, res) => {
             matchInfo.set(t.id, { iO, iD, detourKm: Math.round((iO.dist + iD.dist) * 10) / 10 });
             return true;
           }
-        } else {
-          const P = O || D; const iP = pointToSegment(P, A, B);
+        } else if (D || !destSpecified) {
+          // وجهة فقط، أو موقع الراكب فقط بلا وجهة («القريب مني»)
+          const P = D || O; const iP = pointToSegment(P, A, B);
           if (iP.dist <= corridorKm) { matchInfo.set(t.id, { iO: iP, iD: iP, detourKm: Math.round(iP.dist * 10) / 10 }); return true; }
         }
       }
       // 2) مطابقة قرب الوجهة/الانطلاق نقطةً لنقطة (إن للرحلة إحداثيات والوجهة محدّدة)
       if (D && validPt(B) && haversineKm(D, B) <= corridorKm) { matchInfo.set(t.id, { detourKm: Math.round(haversineKm(D, B) * 10) / 10 }); return true; }
-      if (O && validPt(A) && haversineKm(O, A) <= corridorKm) { matchInfo.set(t.id, { detourKm: Math.round(haversineKm(O, A) * 10) / 10 }); return true; }
+      if (O && !destSpecified && validPt(A) && haversineKm(O, A) <= corridorKm) { matchInfo.set(t.id, { detourKm: Math.round(haversineKm(O, A) * 10) / 10 }); return true; }
       // 3) مطابقة نصية (الوجهة أو المدينة) كحل احتياطي
       if (hasText && (matchLabel(to || '')(t) || matchLabel(city || '')(t))) return true;
       return false;
@@ -1397,6 +1423,8 @@ r.post('/bookings/:id/status', async (req, res) => {
   // الراكب لا يُنهي الرحلة بنفسه — الإكمال حصرًا من السائق (يترتّب عليه حساب العمولة والأرباح)
   const allowed = ['enroute', 'intrip', 'cancelled'];
   if (!allowed.includes(status)) return bad(res, 'حالة غير صالحة');
+  // تكرار الطلب نفسه (الواجهة تعيد مزامنة الحالة) ليس خطأ: أعد الحالة الحالية كما هي
+  if (b.status === status) return res.json({ booking: b });
   if (['completed', 'cancelled'].includes(b.status)) return bad(res, 'الحجز منتهٍ');
   if (status === 'cancelled' && b.request_id) {
     // لا يُلغى الحجز بعد صعود الراكب أو انتهاء الرحلة (وإلا استرجع أجرة رحلة ركبها فعلًا)

@@ -120,7 +120,9 @@ test('الحجز: خصم المحفظة، رفض الرصيد الناقص، و�
   assert.equal(r.status, 400);
   // المقاعد لم تتأثّر بالمحاولة الفاشلة (3 - 1 = 2)
   const mine = await api.get('/trips', driver.token);
-  assert.equal(mine.body.trips.find((t) => t.id === trip.id).total_seats, 2);
+  const mt = mine.body.trips.find((t) => t.id === trip.id);
+  assert.equal(mt.seats_left, 2);
+  assert.equal(mt.total_seats, 3); // السعة الفعلية (متبقّي + محجوز) لا المتبقّي فقط
 });
 
 test('الحجز المتزامن لا يبيع مقاعد أكثر من المتاح', async () => {
@@ -130,7 +132,8 @@ test('الحجز المتزامن لا يبيع مقاعد أكثر من الم�
   const results = await Promise.all(users.map((u) => api.post('/bookings', { rideId: trip.id, seats: 1, payment: 'cash' }, u.token)));
   assert.equal(results.filter((x) => x.status === 201).length, 2);
   const mine = await api.get('/trips', driver.token);
-  assert.equal(mine.body.trips.find((t) => t.id === trip.id).total_seats, 0);
+  assert.equal(mine.body.trips.find((t) => t.id === trip.id).seats_left, 0);
+  assert.equal(mine.body.trips.find((t) => t.id === trip.id).total_seats, 2);
 });
 
 // ===== إصلاح: كود الخصم بالنسبة (10 = 10% وليس ×10) =====
@@ -195,10 +198,14 @@ test('إلغاء الحجز من الراكب يُرجع المبلغ مرّة �
   const { trip, passenger, booking } = await bookWallet({ topup: 100 });
   assert.equal(await api.balance(passenger), 90);
   const rs = await Promise.all([1, 2, 3].map(() => api.post(`/bookings/${booking.id}/status`, { status: 'cancelled' }, passenger.token)));
-  assert.equal(rs.filter((x) => x.status === 200).length, 1);
+  assert.ok(rs.every((x) => x.status === 200 || x.status === 400));
+  assert.ok(rs.filter((x) => x.status === 200 && x.body.wallet !== undefined).length <= 1);
+  assert.equal(await api.balance(passenger), 100); // المبلغ عاد مرّة واحدة فقط
+  // تكرار الطلب لاحقًا idempotent (200 بلا استرجاع إضافي)
+  assert.equal((await api.post(`/bookings/${booking.id}/status`, { status: 'cancelled' }, passenger.token)).status, 200);
   assert.equal(await api.balance(passenger), 100);
   const mine = await api.get('/trips', driver.token);
-  assert.equal(mine.body.trips.find((t) => t.id === trip.id).total_seats, 3);
+  assert.equal(mine.body.trips.find((t) => t.id === trip.id).seats_left, 3);
 });
 
 test('الراكب لا يستطيع «إكمال» الحجز بنفسه ولا الإلغاء بعد صعوده', async () => {
@@ -226,7 +233,7 @@ test('رفض الطلب يُرجع المبلغ مرّة واحدة حتى عن�
   assert.equal(rs.filter((x) => x.status === 200).length, 1);
   assert.equal(await api.balance(passenger), 100);
   const mine = await api.get('/trips', driver.token);
-  assert.equal(mine.body.trips.find((t) => t.id === trip.id).total_seats, 3);
+  assert.equal(mine.body.trips.find((t) => t.id === trip.id).seats_left, 3);
 });
 
 test('سائق آخر لا يقبل طلبات رحلة غيره', async () => {
@@ -452,7 +459,7 @@ test('طلبات «اطلب توصيلة» العالقة تنتهي صلاحي�
       console.log(JSON.stringify({ fresh, stale }));
       process.exit(0);
     })();`;
-  const out = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  const out = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: S.env });
   const res = JSON.parse(out.stdout.trim().split('\n').pop());
   assert.equal(res.fresh, 0);
   assert.ok(res.stale >= 1);
@@ -487,4 +494,110 @@ test('/health يعرض حالة القاعدة', async () => {
   const h = await (await fetch(S.origin + '/health')).json();
   assert.equal(h.ok, true);
   assert.equal(h.db, true);
+});
+
+test('البحث: وجود وجهة (نص) يمنع ظهور رحلات لوجهة أخرى لمجرد قرب نقطة الانطلاق', async () => {
+  const d = await api.approvedDriver(nextPhone(), adminTok);
+  const irbid = await api.publishTrip(d, { from: 'عمان', to: 'إربد', fromCoord: [31.95, 35.91], toCoord: [32.55, 35.85] });
+  const zarqa = await api.publishTrip(d, { from: 'عمان', to: 'الزرقاء', fromCoord: [31.96, 35.92], toCoord: [32.07, 36.09] });
+  const p = await api.register(nextPhone());
+  const ids = (r) => r.body.rides.map((x) => x.id);
+  // وجهة نصية + موقع الراكب
+  const a = await api.get('/rides/search?to=' + encodeURIComponent('إربد') + '&fromLat=31.95&fromLng=35.91', p.token);
+  assert.ok(ids(a).includes(irbid.id));
+  assert.ok(!ids(a).includes(zarqa.id), 'رحلة الزرقاء يجب ألا تظهر في بحث إربد');
+  // موقع فقط (القريب مني): الرحلتان تظهران
+  const near = await api.get('/rides/search?fromLat=31.95&fromLng=35.91', p.token);
+  assert.ok(ids(near).includes(irbid.id) && ids(near).includes(zarqa.id));
+  // وجهة بالإحداثيات فقط
+  const byD = await api.get('/rides/search?toLat=32.07&toLng=36.09', p.token);
+  assert.ok(ids(byD).includes(zarqa.id) && !ids(byD).includes(irbid.id));
+});
+
+test('تعديل مقاعد الرحلة يتعامل مع السعة الإجمالية دون تقليصها بالحجوزات', async () => {
+  const trip = await api.publishTrip(driver, { seats: 4 });
+  const p = await api.register(nextPhone());
+  await api.post('/bookings', { rideId: trip.id, seats: 2, payment: 'cash' }, p.token);
+  // الواجهة تعرض السعة 4 وتعيد إرسالها كما هي → لا تتغيّر المقاعد المتبقّية
+  const same = await api.patch(`/trips/${trip.id}`, { seats: 4 }, driver.token);
+  assert.equal(same.status, 200);
+  assert.equal(same.body.trip.total_seats, 4);
+  assert.equal(same.body.trip.seats_left, 2);
+  // تقليل السعة تحت المحجوز مرفوض
+  assert.equal((await api.patch(`/trips/${trip.id}`, { seats: 1 }, driver.token)).status, 400);
+  const less = await api.patch(`/trips/${trip.id}`, { seats: 3 }, driver.token);
+  assert.equal(less.body.trip.total_seats, 3);
+  assert.equal(less.body.trip.seats_left, 1);
+});
+
+test('الأمن: مستندات التوثيق وحقول الملف لا تقبل HTML/روابط خطرة (حماية لوحة الإدارة من XSS)', async () => {
+  const d = await api.register(nextPhone());
+  await api.patch('/me', { role: 'driver', name: 'سائق' }, d.token);
+  const evilEmail = await api.patch('/me', { email: '<img/src=x/onerror=alert(1)>@a.bc' }, d.token);
+  assert.equal(evilEmail.status, 400);
+  const r = await api.post('/me/verify-request', {
+    idNumber: '1'.repeat(80), city: 'x'.repeat(200), serviceType: 'carpool',
+    docs: { license: '/uploads/ok_1.jpg', idImage: 'https://example.com/a.png', carFront: 'javascript:alert(1)', carBack: 'x" onerror="alert(1)', ['bad key<']: '/uploads/a.jpg' },
+  }, d.token);
+  assert.equal(r.status, 200);
+  const detail = await api.admin.get(`/users/${d.id}`, adminTok);
+  assert.deepEqual(Object.keys(detail.body.docs).sort(), ['idImage', 'license']);
+  assert.ok(detail.body.user.city.length <= 60);
+  assert.ok(detail.body.user.id_number.length <= 30);
+});
+
+test('لوحة الإدارة لا تعرض كلمة المرور الافتراضية وتهرب القيم', async () => {
+  const html = await (await fetch(S.origin + '/admin')).text();
+  assert.ok(!html.includes('كلمة المرور الافتراضية للتجربة'));
+  assert.match(html, /&#39;/); // esc يهرب علامة الاقتباس المفردة
+});
+
+test('الويب: الجذر يحوّل لـ/app، المسارات العميقة تخدم التطبيق، وgzip وETag يعملان', async () => {
+  const root = await fetch(S.origin + '/', { redirect: 'manual' });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get('location'), '/app');
+  const deep = await fetch(S.origin + '/home', { headers: { Accept: 'text/html' } });
+  assert.equal(deep.status, 200);
+  assert.match(deep.headers.get('content-type'), /text\/html/);
+  const gz = await fetch(S.origin + '/app', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(gz.headers.get('content-encoding'), 'gzip');
+  const etag = gz.headers.get('etag');
+  assert.ok(etag);
+  const again = await fetch(S.origin + '/app', { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  // مسار API مجهول لا يُخدم بصفحة التطبيق
+  const api404 = await fetch(S.origin + '/api/nope', { headers: { Accept: 'text/html' } });
+  assert.notEqual(api404.headers.get('content-type') || '', 'text/html; charset=utf-8');
+  // ملفات PWA والخطوط
+  assert.equal((await fetch(S.origin + '/manifest.webmanifest')).status, 200);
+  assert.equal((await fetch(S.origin + '/icon.svg')).status, 200);
+  const font = await fetch(S.origin + '/assets/node_modules/@expo-google-fonts/cairo/Cairo_400Regular.abc.ttf');
+  assert.equal(font.status, 200);
+  assert.equal(font.headers.get('content-type'), 'font/ttf');
+});
+
+test('أخطاء العميل: JSON تالف → 400 وحجم زائد → 413 (لا 500)', async () => {
+  const bad = await fetch(S.origin + '/api/auth/otp/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.50.0.1' }, body: '{oops' });
+  assert.equal(bad.status, 400);
+  const big = await fetch(S.origin + '/api/auth/otp/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.50.0.2' }, body: JSON.stringify({ a: 'x'.repeat(2 * 1024 * 1024) }) });
+  assert.equal(big.status, 413);
+});
+
+test('رابط التتبّع العام: يعمل أثناء الرحلة ولا يكشف موقع السائق بعد انتهائها', async () => {
+  const trip = await api.publishTrip(driver);
+  const p = await api.register(nextPhone());
+  const b = (await api.post('/bookings', { rideId: trip.id, seats: 1, payment: 'cash' }, p.token)).body.booking;
+  const share = await api.post(`/bookings/${b.id}/share`, {}, p.token);
+  assert.equal(share.status, 200);
+  assert.equal((await api.get('/live/' + share.body.token)).status, 200);
+  assert.equal((await api.get('/live/nope')).status, 404);
+  await api.post(`/requests/${b.request_id}/accept`, {}, driver.token);
+  await api.post(`/trips/${trip.id}/start`, {}, driver.token);
+  await api.post(`/trips/${trip.id}/location`, { lat: 31.97, lng: 35.9 }, driver.token);
+  const live = await api.get('/live/' + share.body.token);
+  assert.deepEqual(live.body.driver, [31.97, 35.9]);
+  await api.post(`/trips/${trip.id}/complete`, {}, driver.token);
+  const done = await api.get('/live/' + share.body.token);
+  assert.equal(done.status, 200);
+  assert.equal(done.body.driver, null); // لا موقع بعد الاكتمال
 });

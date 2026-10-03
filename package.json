@@ -1,6 +1,6 @@
 {
   "name": "wasalni-api",
-  "version": "1.0.0",
+  "version": "3.10.0",
   "description": "Wasalni ride-sharing REST API — Express + SQLite",
   "main": "server.js",
   "scripts": {
