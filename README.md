@@ -78,3 +78,20 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:4000 npx expo start
 ### نقاط API الإدارية الجديدة
 `GET /api/admin/countries` · `PATCH /api/admin/countries/:code` · `GET /api/admin/charts` · `GET /api/admin/export/:kind` (users|trips|bookings|finance)
 ونقطة التطبيق: `GET /api/pricing/quote?km=<distance>`
+
+
+## الاختبارات
+```bash
+npm test                  # وحدات + تكامل (node:test) — يشغّل الخادم تلقائيًا بقاعدة مؤقتة على منفذ حرّ
+TEST_PG_URL=postgres://postgres:pw@localhost:5432/postgres npm test   # نفس الاختبارات على PostgreSQL (قاعدة جديدة لكل تشغيل)
+npm run test:regression   # السيناريو الشامل القديم (يتطلّب خادمًا يعمل على المنفذ 4090)
+```
+تغطّي الاختبارات: المصادقة وحدّ محاولات الرمز، الحجز والمحفظة، أكواد الخصم، الإلغاء/الرفض/الإكمال (دون استرجاع أو عمولة مزدوجة)، التقييم، السحب والتسويات، رفع الصور، الإشعارات، وانتهاء طلبات التوصيلة.
+
+## نقاط جديدة
+- `GET /api/notifications` يعيد الآن `unread` وحقل `read` لكل إشعار · `POST /api/notifications/read` (`{ids:[…]}` أو بلا ids لتعليم الكل).
+- `GET /api/driver/stats` — إحصاءات السائق (رحلات، ركّاب، نقد محصَّل، مستحقّات، نسبة القبول).
+- طلبات «اطلب توصيلة» العالقة تُلغى تلقائيًا (30 دقيقة للفورية — `RIDE_REQUEST_TTL_MIN` — و12 ساعة للمجدولة) مع إشعار.
+- `/health` يعيد حالة القاعدة (`db`) ومدّة التشغيل، وإيقاف نظيف عند `SIGTERM`.
+
+> ملاحظة: نسبة كود الخصم تُدخَل كما في لوحة الإدارة (`10` = 10%) وبحدّ أقصى 100.

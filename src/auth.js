@@ -31,6 +31,11 @@ async function findUserByPhone(p, dial) {
   return rows[0] || null;
 }
 
+// يجد صاحب البريد: الحساب الموثَّق أولًا (بريد غير موثّق يمكن لأي حساب ادّعاؤه من «تعديل الملف»)، ولا يشمل المحذوفين
+async function findUserByEmail(email) {
+  return db.queryOne("SELECT * FROM users WHERE LOWER(email)=? AND status<>'deleted' ORDER BY email_verified DESC, id ASC LIMIT 1", [email]);
+}
+
 async function sendOtp(phone, dial) {
   phone = normalizePhone(phone, dial);
   // منع إعادة الإرسال المتكرّر
@@ -117,7 +122,7 @@ async function verifyOtp(phone, dial, countryCode, code) {
 // ---------- الدخول أو التسجيل بالبريد الإلكتروني (بديل للهاتف) ----------
 // يرسل رمزًا لأي بريد صالح؛ عند التحقّق: يدخل الحساب الموجود بهذا البريد،
 // أو يُنشئ حسابًا جديدًا (تسجيل) إن لم يوجد — تمامًا كما يفعل رمز الهاتف.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@<>"'`]+@[^\s@<>"'`]+\.[^\s@<>"'`]+$/;
 async function sendEmailLoginOtp(email) {
   const e = String(email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(e)) return { error: 'بريد إلكتروني غير صالح' };
@@ -149,7 +154,7 @@ async function verifyEmailLoginOtp(email, code) {
     return { error: 'الرمز غير صحيح' };
   }
   await db.execute('DELETE FROM email_otps WHERE email=?', [e]);
-  let user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [e]);
+  let user = await findUserByEmail(e);
   if (!user) {
     // تسجيل جديد بالبريد: هاتف نائب فريد (email:<البريد>) لأن العمود NOT NULL UNIQUE —
     // يُخفى في publicUser، ويُستبدل لاحقًا إن أضاف المستخدم رقمه من الإعدادات.
@@ -185,7 +190,7 @@ async function verifyGoogleLogin(idToken) {
   }
   if (!payload || !payload.email || !payload.email_verified) return { error: 'حساب جوجل غير موثّق البريد' };
   const email = String(payload.email).toLowerCase();
-  let user = await db.queryOne('SELECT * FROM users WHERE LOWER(email)=?', [email]);
+  let user = await findUserByEmail(email);
   if (!user) {
     // تسجيل جديد بجوجل: هاتف نائب فريد (يُخفى في publicUser) + اسم جوجل إن توفّر
     const { insertReturningId } = require('./db');

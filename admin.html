@@ -127,7 +127,7 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
     <p class="muted" style="font-size:13px;margin-top:6px">أدخل كلمة مرور الإدارة للمتابعة</p>
     <div class="field" style="margin-top:22px;text-align:right">
       <label>عنوان الخادم (API)</label>
-      <input id="apiUrl" value="http://localhost:4000" dir="ltr">
+      <input id="apiUrl" value="http://localhost:4000" dir="ltr" autocomplete="off">
     </div>
     <div class="field" style="text-align:right">
       <label>كلمة مرور الإدارة</label>
@@ -135,7 +135,6 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
     </div>
     <div id="loginErr" class="muted" style="color:var(--red);font-size:12.5px;min-height:18px;margin-bottom:6px"></div>
     <button class="btn btn-pri" style="width:100%;padding:13px" onclick="doLogin()">دخول</button>
-    <p class="muted" style="font-size:11px;margin-top:14px">كلمة المرور الافتراضية للتجربة: wasalni-admin</p>
   </div>
 </div>
 
@@ -188,9 +187,9 @@ html[data-theme=dark] .t-green{background:#13301F}html[data-theme=dark] .t-am{ba
 const S = { api:'', token:'', page:'dashboard', cache:{} };
 const $ = s => document.querySelector(s);
 const fmt = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
-const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const initials = n => (n||'?').trim().charAt(0);
-const imgUrl = u => u ? (String(u).startsWith('http') ? u : S.api + u) : '';
+const imgUrl = u => u ? esc(/^https:\/\//.test(String(u)) ? u : (String(u).startsWith('/uploads/') ? S.api + u : '')) : '';
 const DOC_LABELS = { idImage:'الهوية', license:'الرخصة', carFront:'أمامية', carBack:'خلفية', carInterior:'داخلية', registration:'الاستمارة', insurance:'التأمين' };
 function docGrid(docs){
   if(!docs || typeof docs!=='object') return '<div class="muted" style="font-size:12px">لا توجد صور مرفوعة</div>';
@@ -410,8 +409,8 @@ async function userDetail(id){
       ${row('الدور', u.role==='driver'?'سائق':'راكب')}
       ${row('الجنس', u.gender==='female'?'أنثى':u.gender==='male'?'ذكر':'—')}
       ${row('الدولة', u.country_code||'—')}
-      ${row('المدينة', u.city||'—')}
-      ${row('البريد', u.email||'—')}
+      ${row('المدينة', esc(u.city||'—'))}
+      ${row('البريد', esc(u.email||'—'))}
       ${row('التقييم', '★ '+fmt(u.rating))}
       ${row('المحفظة', cur+' '+fmt(u.wallet))}
       ${u.role==='driver'?row('الأرباح', cur+' '+fmt(u.earnings)):''}
@@ -953,6 +952,8 @@ async function saveCountries(){
 
 // إقلاع: استرجاع الجلسة + الثيم
 (function(){
+  // عند فتح اللوحة من الخادم نفسه (/admin) اجعل عنوان الـAPI هو الأصل الحالي تلقائيًا (بدل localhost:4000)
+  try { if (/^https?:$/.test(location.protocol) && location.pathname.replace(/\/+$/,'') === '/admin') $('#apiUrl').value = location.origin; } catch(e){}
   const th=localStorage.getItem('wasalni_theme'); if(th) document.documentElement.dataset.theme=th;
   const saved=localStorage.getItem('wasalni_admin');
   if(saved){ try{ const d=JSON.parse(saved); S.api=d.api; S.token=d.token; $('#apiUrl').value=d.api;

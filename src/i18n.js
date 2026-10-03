@@ -32,6 +32,27 @@ const EXACT = {
   'جلسة غير صالحة': 'Session expired — please sign in again',
   'محاولات تحقّق كثيرة، انتظر قليلاً': 'Too many attempts — please wait a moment',
   'طلبات كثيرة، انتظر قليلاً': 'Too many requests — please wait a moment',
+  // ---- إضافات المراجعة الأخيرة ----
+  'انتهت صلاحية رابط التتبّع': 'This tracking link has expired',
+  'بيانات الطلب غير صالحة (JSON)': 'Invalid request data (JSON)',
+  'حجم الطلب كبير جدًا': 'Request is too large',
+  'مصدر غير مسموح': 'Origin not allowed',
+  'خطأ داخلي في الخادم': 'Internal server error',
+  'سبق أن استخدمت هذا الكود أو انتهت مرّات استخدامه': 'You already used this code, or it has run out of uses',
+  'قيمة كود الخصم غير صالحة': 'Invalid promo code value',
+  'لا يمكن إلغاء الحجز بعد انطلاق الرحلة': "You can't cancel a booking after the trip has started",
+  'التقييم يجب أن يكون من 1 إلى 5': 'Rating must be between 1 and 5',
+  'يمكن التقييم بعد اكتمال الرحلة فقط': 'You can rate once the trip is completed',
+  'يمكن التقييم بعد إنزال الراكب فقط': 'You can rate once the passenger has been dropped off',
+  'لديك تحويلات معلّقة بانتظار التأكيد تغطّي مستحقّاتك': 'You have pending transfers awaiting confirmation that already cover your dues',
+  'الملف ليس صورة صالحة (PNG/JPG/WebP)': 'The file is not a valid image (PNG/JPG/WebP)',
+  'تجاوزت عدد المحاولات — اطلب رمزًا جديدًا': 'Too many attempts — request a new code',
+  'للسائقين فقط': 'Drivers only',
+  'طلبات رمز كثيرة، انتظر قليلاً': 'Too many code requests — please wait a moment',
+  'استرجاع حجز لم يُقبل': 'Refund for unaccepted booking',
+  'انتهت الرحلة دون قبول حجزك': 'The trip ended without accepting your booking',
+  'انتهت مهلة طلب توصيلتك': 'Your ride request timed out',
+  'انتهى طلب التوصيلة': 'The ride request has ended',
   // ---- الملف ----
   'دور غير صالح': 'Invalid role',
   'قيمة الجنس غير صالحة': 'Invalid gender value',
@@ -244,6 +265,8 @@ const PLAN_EN = { 'أسبوعي': 'weekly', 'شهري': 'monthly' };
 
 // قوالب بأجزاء متغيّرة: [تعبير, دالة إنتاج الإنجليزية]
 const TEMPLATES = [
+  [/^(.+) — لم يتم الاتفاق مع سائق، يمكنك إرسال طلب جديد$/, (m) => `${route(m[1])} — no driver agreed in time, you can send a new request`],
+  [/^(.+) — أُعيد المبلغ لمحفظتك$/, (m) => `${route(m[1])} — refunded to your wallet`],
   [/^عليك مستحقّات للمنصّة بقيمة (.+?) — سدّدها أولًا من «محفظة السائق ← مستحقّات المنصّة» ثم احذف الحساب$/, (m) => `You owe the platform ${m[1]} — settle it from "Driver wallet → Platform dues" before deleting your account`],
   [/^سعر المقعد غير صالح \((.+)\)$/, (m) => `Invalid seat price (${m[1]})`],
   [/^عدد المقاعد يجب أن يكون بين (\d+) و (\d+)$/, (m) => `Seats must be between ${m[1]} and ${m[2]}`],

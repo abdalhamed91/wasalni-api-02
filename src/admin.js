@@ -126,6 +126,10 @@ r.patch('/users/:id', async (req, res) => {
   const u = await db.queryOne('SELECT id FROM users WHERE id=?', [id]);
   if (!u) return bad(res, 'المستخدم غير موجود', 404);
   const { name, email, city, wallet, rating, role, gender, verified } = req.body || {};
+  if (wallet != null && (!Number.isFinite(Number(wallet)) || Number(wallet) < 0 || Number(wallet) > 1e6)) return bad(res, 'رصيد غير صالح');
+  if (rating != null && (!Number.isFinite(Number(rating)) || Number(rating) < 0 || Number(rating) > 5)) return bad(res, 'تقييم غير صالح (0–5)');
+  if (role != null && !['passenger', 'driver'].includes(role)) return bad(res, 'دور غير صالح');
+  if (gender != null && gender !== '' && !['male', 'female'].includes(gender)) return bad(res, 'قيمة الجنس غير صالحة');
   await db.execute(`UPDATE users SET
       name=COALESCE(?,name), email=COALESCE(?,email), city=COALESCE(?,city),
       wallet=COALESCE(?,wallet), rating=COALESCE(?,rating), role=COALESCE(?,role),
@@ -230,13 +234,15 @@ r.post('/trips/:id/cancel', async (req, res) => {
   if (!trip) return bad(res, 'الرحلة غير موجودة', 404);
   if (['completed', 'cancelled'].includes(trip.status)) return bad(res, 'لا يمكن إلغاء هذه الرحلة');
   const reason = req.body?.reason ? String(req.body.reason).slice(0, 300) : 'أُلغيت من الإدارة';
+  const tclaim = await db.execute("UPDATE trips SET status='cancelled', cancel_reason=? WHERE id=? AND status NOT IN ('completed','cancelled')", [reason, trip.id]);
+  if (!tclaim.rowCount) return bad(res, 'لا يمكن إلغاء هذه الرحلة');
   const active = await db.query("SELECT * FROM requests WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
   for (const rq of active) {
     if (rq.passenger_id) {
       const bk = await db.queryOne("SELECT * FROM bookings WHERE request_id=? AND status NOT IN ('cancelled','completed')", [rq.id]);
       if (bk) {
-        await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", [bk.id]);
-        if (bk.payment !== 'cash') {
+        const bclaim = await db.execute("UPDATE bookings SET status='cancelled' WHERE id=? AND status NOT IN ('cancelled','completed')", [bk.id]);
+        if (bclaim.rowCount && bk.payment !== 'cash') {
           await db.execute('UPDATE users SET wallet = wallet + ? WHERE id=?', [bk.fare, bk.passenger_id]);
           await addTxn(bk.passenger_id, 'passenger', 'استرجاع رحلة أُلغيت من الإدارة', bk.fare, 'in');
         }
@@ -245,7 +251,6 @@ r.post('/trips/:id/cancel', async (req, res) => {
     }
   }
   await db.execute("UPDATE requests SET status='cancelled' WHERE trip_id=? AND status IN ('pending','accepted','onboard')", [trip.id]);
-  await db.execute("UPDATE trips SET status='cancelled', cancel_reason=? WHERE id=?", [reason, trip.id]);
   await addNotif(trip.driver_id, 'x', 'red', 'أُلغيت رحلتك من الإدارة', `${trip.from_label} ← ${trip.to_label} — ${reason}`, '/(driver)/dmytrips');
   res.json({ ok: true });
 });
@@ -302,14 +307,17 @@ r.patch('/withdrawals/:id', async (req, res) => {
   const w = await db.queryOne('SELECT * FROM withdrawals WHERE id=?', [id]);
   if (!w) return bad(res, 'طلب السحب غير موجود', 404);
   if (w.status !== 'pending') return bad(res, 'تمت معالجة هذا الطلب مسبقًا');
+  if (!['paid', 'reject'].includes(action)) return bad(res, 'إجراء غير صالح (paid|reject)');
+  // انتقال الحالة ذرّيًّا: ضغطتان متزامنتان على «رفض» لا تُعيدان المبلغ مرّتين
+  const claim = await db.execute("UPDATE withdrawals SET status=?, admin_note=?, paid_at=? WHERE id=? AND status='pending'",
+    [action === 'paid' ? 'paid' : 'rejected', note, action === 'paid' ? now() : null, id]);
+  if (!claim.rowCount) return bad(res, 'تمت معالجة هذا الطلب مسبقًا');
   const cur = curOf((await db.queryOne('SELECT country_code FROM users WHERE id=?', [w.user_id]) || {}).country_code);
   if (action === 'paid') {
-    await db.execute('UPDATE withdrawals SET status=?, admin_note=?, paid_at=? WHERE id=?', ['paid', note, now(), id]);
     await addNotif(w.user_id, 'wallet', 'green', 'تم تحويل أرباحك ✓', `${round2(w.amount)} ${cur} إلى حسابك البنكي`, '/(driver)/dwallet');
   } else if (action === 'reject') {
     // أعد المبلغ إلى أرباح السائق
     await db.execute('UPDATE users SET earnings = earnings + ? WHERE id=?', [w.amount, w.user_id]);
-    await db.execute('UPDATE withdrawals SET status=?, admin_note=? WHERE id=?', ['rejected', note, id]);
     await addNotif(w.user_id, 'x', 'red', 'لم يُعتمد طلب السحب', (note || 'تواصل مع الدعم') + ` — أُعيد ${round2(w.amount)} ${cur} لرصيدك`, '/(driver)/dwallet');
   } else return bad(res, 'إجراء غير صالح (paid|reject)');
   res.json({ ok: true });
@@ -336,15 +344,18 @@ r.patch('/settlements/:id', async (req, res) => {
   const s = await db.queryOne('SELECT * FROM settlements WHERE id=?', [id]);
   if (!s) return bad(res, 'التسوية غير موجودة', 404);
   if (s.status !== 'pending') return bad(res, 'تمت معالجة هذه التسوية مسبقًا');
+  if (!['confirm', 'reject'].includes(action)) return bad(res, 'إجراء غير صالح (confirm|reject)');
+  // انتقال الحالة ذرّيًّا: يمنع تأكيد التسوية نفسها مرّتين (خصم مزدوج من ديْن السائق)
+  const claim = await db.execute("UPDATE settlements SET status=?, admin_note=?, confirmed_at=? WHERE id=? AND status='pending'",
+    [action === 'confirm' ? 'confirmed' : 'rejected', note, action === 'confirm' ? now() : null, id]);
+  if (!claim.rowCount) return bad(res, 'تمت معالجة هذه التسوية مسبقًا');
   const cur = curOf((await db.queryOne('SELECT country_code FROM users WHERE id=?', [s.driver_id]) || {}).country_code);
   if (action === 'confirm') {
     // خصم المبلغ من مستحقّات السائق (لا ينزل تحت الصفر)
     await db.execute('UPDATE users SET platform_dues = CASE WHEN platform_dues < ? THEN 0 ELSE platform_dues - ? END WHERE id=?', [s.amount, s.amount, s.driver_id]);
-    await db.execute('UPDATE settlements SET status=?, admin_note=?, confirmed_at=? WHERE id=?', ['confirmed', note, now(), id]);
     await addTxn(s.driver_id, 'platform', 'تسوية مستحقّات — مؤكّدة', s.amount, 'in');
     await addNotif(s.driver_id, 'check', 'green', 'تم تأكيد تسويتك ✓', `${round2(s.amount)} ${cur} — خُصمت من مستحقّاتك`, '/(driver)/ddues');
   } else if (action === 'reject') {
-    await db.execute('UPDATE settlements SET status=?, admin_note=? WHERE id=?', ['rejected', note, id]);
     await addNotif(s.driver_id, 'x', 'red', 'لم تُعتمد تسويتك', (note || 'تواصل مع الدعم') + ` — ${round2(s.amount)} ${cur}`, '/(driver)/ddues');
   } else return bad(res, 'إجراء غير صالح (confirm|reject)');
   res.json({ ok: true });
@@ -488,11 +499,15 @@ r.get('/promos', async (_req, res) => {
 r.post('/promos', async (req, res) => {
   const { code, title, discountType, discountValue, maxUses, country, expiresAt } = req.body || {};
   if (!code || !title || discountValue == null) return bad(res, 'الكود والعنوان والقيمة مطلوبة');
+  const dv = Number(discountValue);
+  if (!Number.isFinite(dv) || dv <= 0) return bad(res, 'قيمة الخصم يجب أن تكون أكبر من صفر');
+  if (discountType !== 'flat' && dv > 100) return bad(res, 'نسبة الخصم لا تتجاوز 100%');
+  if (discountType === 'flat' && dv > 1000) return bad(res, 'مبلغ الخصم الثابت لا يتجاوز 1000');
   const exists = await db.queryOne('SELECT id FROM promos WHERE code=?', [String(code).toUpperCase()]);
   if (exists) return bad(res, 'هذا الكود مستخدم مسبقًا');
   const id = await insertReturningId('promos',
     ['code', 'title', 'discount_type', 'discount_value', 'max_uses', 'country', 'active', 'expires_at', 'created_at'],
-    [String(code).toUpperCase(), title, discountType === 'flat' ? 'flat' : 'percent', Number(discountValue), Number(maxUses) || 0, country || null, PG_BOOL ? true : 1, expiresAt || null, now()]);
+    [String(code).toUpperCase(), title, discountType === 'flat' ? 'flat' : 'percent', dv, Number(maxUses) || 0, country || null, PG_BOOL ? true : 1, expiresAt || null, now()]);
   res.status(201).json({ ok: true, id });
 });
 r.patch('/promos/:id', async (req, res) => {
